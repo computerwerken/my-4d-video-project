@@ -1,5 +1,14 @@
 // MIT License. Copyright (c) 2025 Lifecast Incorporated. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// MODIFIED: MPS (Metal) inference enabled on Apple Silicon.
+//   - Removed the hard-coded `device = torch::kCPU` hack in computeOpticalFlowRAFT.
+//   - PYTORCH_ENABLE_MPS_FALLBACK=1 is set on Apple so ops missing on MPS fall back
+//     to CPU instead of crashing (the original reason for the hack).
+//   - Escape hatch: run with LIFECAST_FORCE_CPU=1 to restore old CPU-only behavior.
+//   - Replaced the per-pixel tensor->Mat copy loop with a bulk 2-channel copy.
+//   - Vectorized the bias/clamp and error-map loops.
 
+#include <cstdlib>
 #include <fstream>
 #include <filesystem>
 #include <regex>
@@ -17,9 +26,29 @@
 
 namespace p11 { namespace optical_flow {
 
+namespace {
+// Returns the device to run flow inference on, honoring the LIFECAST_FORCE_CPU=1
+// escape hatch (useful if a particular model/libtorch combo misbehaves on MPS).
+torch::DeviceType findFlowDevice()
+{
+  torch::DeviceType device = util_torch::findBestTorchDevice();
+  if (const char* force_cpu = std::getenv("LIFECAST_FORCE_CPU")) {
+    if (std::string(force_cpu) == "1") device = torch::kCPU;
+  }
+  return device;
+}
+}  // namespace
+
 void getTorchModelRAFT(torch::jit::script::Module& module, std::string model_path)
 {
   torch::NoGradGuard no_grad;
+
+#if defined(__APPLE__)
+  // Allow torch to fall back to CPU for any op not yet implemented on MPS
+  // (e.g. the old aten::searchsorted gap). Must be set before the first MPS op
+  // dispatch. overwrite=0 respects a value the user already exported.
+  setenv("PYTORCH_ENABLE_MPS_FALLBACK", "1", /*overwrite=*/0);
+#endif
 
   if (model_path.empty()) {
 #if defined(__linux__)
@@ -27,7 +56,9 @@ void getTorchModelRAFT(torch::jit::script::Module& module, std::string model_pat
 #elif defined(_WIN32)
     const std::string default_model = "rof_cuda.pt";  // On windows the directory structure is flat
 #elif defined(__APPLE__)
-    //const std::string default_model = "ml_models/rof_mps.pt";
+    // rof_cpu.pt is a CPU-traced TorchScript module; with a modern libtorch it can be
+    // moved to MPS via .to(). If that trips on baked-in CPU device constants, re-export
+    // with scripts/export_raft_torchscript.py --device mps and use ml_models/rof_mps.pt.
     const std::string default_model = "ml_models/rof_cpu.pt";
 #else
     const std::string default_model = "ml_models/rof_cpu.pt";
@@ -46,6 +77,7 @@ void getTorchModelRAFT(torch::jit::script::Module& module, std::string model_pat
 #else
     module = torch::jit::load(model_path);
 #endif
+    module.eval();
   } catch (const c10::Error& e) {
     XCHECK(false) << "Error loading torch module: " << e.what() << "\n" << e.msg();
   }
@@ -89,10 +121,8 @@ void computeOpticalFlowRAFT(
   at::Tensor tensor_image2 =
       torch::from_blob(image2.data, {image2.rows, image2.cols, 3}, at::kFloat);
 
-  torch::DeviceType device = util_torch::findBestTorchDevice();
-#if defined(__APPLE__)
-  device = torch::kCPU; // HACK: metal seems to be broken on mac in this version
-#endif
+  // MPS is used on Apple Silicon when available (previously forced to CPU here).
+  const torch::DeviceType device = findFlowDevice();
 
   tensor_image1.unsqueeze_(0);
   tensor_image2.unsqueeze_(0);
@@ -100,51 +130,32 @@ void computeOpticalFlowRAFT(
   auto tensor_image2_perm = tensor_image2.permute({0, 3, 1, 2});
 
   std::vector<torch::jit::IValue> inputs;
-  auto inp1 = tensor_image1_perm.to(device, 0);
-  auto inp2 = tensor_image2_perm.to(device, 0);
+  auto inp1 = tensor_image1_perm.to(device);
+  auto inp2 = tensor_image2_perm.to(device);
   inputs.push_back(inp1);
   inputs.push_back(inp2);
 
   module.to(device);
 
-  // auto t0 = time::now();
-  //#ifdef __APPLE__
-  // auto outputs = module.forward(inputs).toTuple();
   auto rawOutputs = module.forward(inputs);
   auto outputs = rawOutputs.toTuple();
   auto flow_up = outputs->elements()[1].toTensor();
-  //#endif
-  //#ifdef __linux__
-  //  auto outputs = module.forward(inputs);
-  //  auto flow_up = outputs.toList().get(1).toTensor();
-  //#endif
-  // XPLINFO << "time forward: " << time::timeSinceSec(t0);
 
-  // auto t3 = time::now();
   auto flow_up_perm = flow_up.permute({0, 2, 3, 1});
-  // XPLINFO << "time permute: " << time::timeSinceSec(t3);
 
   const int w = flow_up_perm.sizes()[2];
   const int h = flow_up_perm.sizes()[1];
 
-  // auto t1 = time::now();
-  auto flow_up_perm_cpu = flow_up_perm.to(torch::kCPU);
-  // XPLINFO << "time GPU->CPU: " << time::timeSinceSec(t1);
+  // Bring back to CPU as contiguous float32 (also handles fp16 models).
+  auto flow_up_perm_cpu = flow_up_perm.to(torch::kCPU).to(torch::kFloat).contiguous();
 
-  // auto t2 = time::now();
-  flow_x = cv::Mat(cv::Size(w, h), CV_32F, cv::Scalar(0));
-  flow_y = cv::Mat(cv::Size(w, h), CV_32F, cv::Scalar(0));
-  auto accessor = flow_up_perm_cpu.accessor<float, 4>();
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      // Slow way (not using accessor):
-      // flow_x.at<float>(y, x) = flow_up_perm_cpu.index({0, y, x, 0}).item<float>();
-      // flow_y.at<float>(y, x) = flow_up_perm_cpu.index({0, y, x, 1}).item<float>();
-      flow_x.at<float>(y, x) = accessor[0][y][x][0];
-      flow_y.at<float>(y, x) = accessor[0][y][x][1];
-    }
-  }
-  // XPLINFO << "time for cv::Mat: " << time::timeSinceSec(t2);
+  // Bulk copy: wrap the [1, H, W, 2] tensor as a 2-channel Mat and split.
+  // cv::split copies the data, so lifetime is safe after this scope.
+  cv::Mat flow_xy(cv::Size(w, h), CV_32FC2, flow_up_perm_cpu.data_ptr<float>());
+  std::vector<cv::Mat> flow_channels;
+  cv::split(flow_xy, flow_channels);
+  flow_x = flow_channels[0];
+  flow_y = flow_channels[1];
 }
 
 cv::Mat computeDisparityRAFT(
@@ -156,11 +167,10 @@ cv::Mat computeDisparityRAFT(
   cv::Mat flow_x, flow_y;
   computeOpticalFlowRAFT(module, image1_8u, image2_8u, flow_x, flow_y);
 
-  for (int y = 0; y < flow_x.rows; ++y) {
-    for (int x = 0; x < flow_x.cols; ++x) {
-      flow_x.at<float>(y, x) = std::max(0.0f, flow_x.at<float>(y, x) + bias);
-    }
-  }
+  // Vectorized replacement for the old per-pixel loop:
+  // disparity = max(0, flow_x + bias)
+  flow_x += bias;
+  cv::max(flow_x, 0.0f, flow_x);
   return flow_x;
 }
 
@@ -187,22 +197,19 @@ void computeDisparityRAFTBothWays(
   static constexpr float kVerticalDisparityErrorCoef =
       30.0;  // weight of vertical disparity in overall error
   static constexpr float kDisparityConsistencyErrorCoef = 100.0;
-  R_error = cv::Mat(cv::Size(w, h), CV_32F);
-  L_error = cv::Mat(cv::Size(w, h), CV_32F);
 
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      R_flow_x.at<float>(y, x) = std::max(0.0f, R_flow_x.at<float>(y, x) + bias);
-      L_flow_x.at<float>(y, x) = std::max(0.0f, -L_flow_x.at<float>(y, x) + bias);
+  // Vectorized replacements for the old per-pixel loops.
+  R_flow_x += bias;
+  cv::max(R_flow_x, 0.0f, R_flow_x);
+  L_flow_x *= -1.0f;
+  L_flow_x += bias;
+  cv::max(L_flow_x, 0.0f, L_flow_x);
 
-      // Any vertical flow suggests depth estimation / calibration error (or at least uncertainty in
-      // depth).
-      R_error.at<float>(y, x) =
-          std::abs(R_flow_y.at<float>(y, x)) * (kVerticalDisparityErrorCoef / h);
-      L_error.at<float>(y, x) =
-          std::abs(L_flow_y.at<float>(y, x)) * (kVerticalDisparityErrorCoef / h);
-    }
-  }
+  // Any vertical flow suggests depth estimation / calibration error (or at least
+  // uncertainty in depth).
+  R_error = cv::abs(R_flow_y) * (kVerticalDisparityErrorCoef / h);
+  L_error = cv::abs(L_flow_y) * (kVerticalDisparityErrorCoef / h);
+
   R_disparity = R_flow_x;
   L_disparity = L_flow_x;
 
@@ -241,19 +248,16 @@ void computeDisparityRAFTBothWays(
       cv::BORDER_CONSTANT,
       cv::Scalar(0, 0, 0, 0));
 
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      const float R_err =
-          std::abs(R_reconstructed_from_L.at<float>(y, x) - R_disparity.at<float>(y, x)) *
-          (kDisparityConsistencyErrorCoef / w);
-      const float L_err =
-          std::abs(L_reconstructed_from_R.at<float>(y, x) - L_disparity.at<float>(y, x)) *
-          (kDisparityConsistencyErrorCoef / w);
-
-      R_error.at<float>(y, x) = math::clamp(R_error.at<float>(y, x) + R_err, 0.0f, 1.0f);
-      L_error.at<float>(y, x) = math::clamp(L_error.at<float>(y, x) + L_err, 0.0f, 1.0f);
-    }
-  }
+  // Vectorized: error += |reconstructed - disparity| * coef, clamped to [0, 1].
+  cv::Mat R_consistency, L_consistency;
+  cv::absdiff(R_reconstructed_from_L, R_disparity, R_consistency);
+  cv::absdiff(L_reconstructed_from_R, L_disparity, L_consistency);
+  R_error += R_consistency * (kDisparityConsistencyErrorCoef / w);
+  L_error += L_consistency * (kDisparityConsistencyErrorCoef / w);
+  cv::min(R_error, 1.0f, R_error);
+  cv::min(L_error, 1.0f, L_error);
+  cv::max(R_error, 0.0f, R_error);
+  cv::max(L_error, 0.0f, L_error);
 }
 
 }}  // namespace p11::optical_flow
