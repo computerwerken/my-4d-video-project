@@ -1,6 +1,7 @@
 // MIT License. Copyright (c) 2025 Lifecast Incorporated. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "ldi_pipeline_lib.h"
+#include "depth_anything3.h"
 #include "turbojpeg_wrapper.h"
 #include "projection.h"
 #include "vignette.h"
@@ -52,6 +53,9 @@ struct VR180DepthProcessor {
   // Model optical flow/disparity
   torch::jit::script::Module raft_module;
 
+  // Depth Anything 3 stereo module, loaded only when cfg.depth_method != "raft"
+  torch::jit::script::Module da3_module;
+
   LdiPipelineConfig cfg;
 
   VR180DepthProcessor(const LdiPipelineConfig& cfg) : cfg(cfg) {}
@@ -90,6 +94,9 @@ struct VR180DepthProcessor {
     // than it saves here).
     torch::jit::getProfilingMode() = false;
     optical_flow::getTorchModelRAFT(raft_module, /*model_path=*/"");
+    if (cfg.depth_method == "da3_fused" || cfg.depth_method == "da3_only") {
+      depth_estimation::getTorchModelDepthAnything3(da3_module, cfg.da3_model_path);
+    }
   }
 
   void estimateDepthForFrame(const cv::Mat& frame, const int frame_index)
@@ -116,6 +123,16 @@ struct VR180DepthProcessor {
     XPLINFO << "depth time(sec):\t" << time::timeSinceSec(disparity_start_timer);
 
     cv::Mat R_inv_depth_rectified = projection::disparityToInvDepth(R_disparity, cfg.baseline_m);
+
+    if (cfg.depth_method == "da3_fused" || cfg.depth_method == "da3_only") {
+      auto da3_timer = time::now();
+      depth_estimation::DA3StereoResult da3 =
+          depth_estimation::estimateInvDepthDA3Stereo(da3_module, L_rectified, R_rectified);
+      const float blend = cfg.depth_method == "da3_only" ? 1.0f : (float)cfg.da3_blend;
+      R_inv_depth_rectified = depth_estimation::fuseWithStereoInvDepth(
+          da3.inv_depth, da3.confidence, R_inv_depth_rectified, blend);
+      XPLINFO << "da3 time(sec):\t" << time::timeSinceSec(da3_timer);
+    }
 
     // Warp the rectified depth to f-theta projection
     cv::Mat R_inv_depth_ftheta =
@@ -686,6 +703,16 @@ void runVR180PhototoLdiPipeline(const LdiPipelineConfig& cfg)
               << time::timeSinceSec(disparity_start_timer);
     }
     cv::Mat R_inv_depth_rectified = projection::disparityToInvDepth(R_disparity, cfg.baseline_m);
+
+    if (cfg.depth_method == "da3_fused" || cfg.depth_method == "da3_only") {
+      torch::jit::script::Module da3_module;
+      depth_estimation::getTorchModelDepthAnything3(da3_module, cfg.da3_model_path);
+      depth_estimation::DA3StereoResult da3 =
+          depth_estimation::estimateInvDepthDA3Stereo(da3_module, L_rectified, R_rectified);
+      const float blend = cfg.depth_method == "da3_only" ? 1.0f : (float)cfg.da3_blend;
+      R_inv_depth_rectified = depth_estimation::fuseWithStereoInvDepth(
+          da3.inv_depth, da3.confidence, R_inv_depth_rectified, blend);
+    }
 
     // Warp the rectified depth to f-theta projection
     R_inv_depth_ftheta =
