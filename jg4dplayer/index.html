@@ -60,6 +60,7 @@
   <button id="play_btn" title="Space">play</button>
   <label title="Interaxial separation (mm)">ipd <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span id="ipd_val">63</span></label>
   <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
+  <label title="Expand TV-range (limited) video levels — auto-detected; toggle if depth looks flat or colors washed out"><input type="checkbox" id="tvfix"> tv-fix</label>
   <label title="Render eyes at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
   <label title="Swap left/right eyes"><input type="checkbox" id="swap"> swap</label>
   <span class="spacer"></span>
@@ -80,6 +81,17 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.m
 // ============================== LDI3 shaders =================================
 // Adapted from Lifecast's LifecastVideoPlayerShaders11.js (MIT License,
 // Copyright (c) 2021 Lifecast Incorporated). Intro-transition code removed.
+
+// Some browser video paths (notably software-decoded large h264 flagged
+// color_range=tv) deliver UNEXPANDED limited-range values to WebGL. That shifts
+// every byte by ~16/255 and breaks the bit-exact 12-bit depth reconstruction.
+// When uRangeFix=1, undo the compression: v = (v*255 - 16) / 219.
+const rangeFix = `
+uniform float uRangeFix;
+float fixv(float v) { return mix(v, clamp((v * 255.0 - 16.0) / 219.0, 0.0, 1.0), uRangeFix); }
+vec3 fixc(vec3 c)   { return mix(c, clamp((c * 255.0 - 16.0) / 219.0, 0.0, 1.0), uRangeFix); }
+`;
+
 const decode12bit = `
 float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
 #if defined(DECODE_12BIT)
@@ -88,10 +100,10 @@ float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
   ivec2 texture_size = textureSize(uTexture, 0);
   ivec2 texel_coord_lo = ivec2(vec2(texture_size) * depth_uv_lo);
   ivec2 texel_coord_hi = ivec2(vec2(texture_size) * depth_uv_hi);
-  float ds_lo = texelFetch(uTexture, texel_coord_lo, 0).r;
-  float ds_hi = texelFetch(uTexture, texel_coord_hi, 0).r;
-  int lo = int(ds_lo * 255.0) & 255;
-  int hi = int(ds_hi * 255.0) & 255;
+  float ds_lo = fixv(texelFetch(uTexture, texel_coord_lo, 0).r);
+  float ds_hi = fixv(texelFetch(uTexture, texel_coord_hi, 0).r);
+  int lo = int(ds_lo * 255.0 + 0.5) & 255;
+  int hi = int(ds_hi * 255.0 + 0.5) & 255;
   hi = hi / 16;
   lo = (hi & 1) == 0 ? lo : 255 - lo;
   int i12 = (lo & 255) | ((hi & 15) << 8);
@@ -101,7 +113,7 @@ float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
   vec2 depth_uv_8bit = cell_offset + depth_uv_unscaled * 0.33333;
   ivec2 texture_size = textureSize(uTexture, 0);
   ivec2 texel_coord = ivec2(vec2(texture_size) * depth_uv_8bit);
-  float v = texelFetch(uTexture, texel_coord, 0).r;
+  float v = fixv(texelFetch(uTexture, texel_coord, 0).r);
   return clamp(v, 0.0001, 1.0);
 #endif
 }
@@ -111,7 +123,7 @@ const fgVert = `
 precision highp float;
 uniform sampler2D uTexture;
 varying vec2 vUv;
-` + decode12bit + `
+` + rangeFix + decode12bit + `
 void main() {
   vUv = uv;
 #if defined(LAYER2)
@@ -128,6 +140,7 @@ const fgFrag = `
 precision highp float;
 uniform sampler2D uTexture;
 varying vec2 vUv;
+` + rangeFix + `
 void main() {
 #if defined(LAYER2)
   vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.66666);
@@ -136,8 +149,8 @@ void main() {
   vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.33333);
   vec2 texture_uv = vec2(vUv.s * 0.33333,           vUv.t * 0.33333 + 0.33333);
 #endif
-  vec3 rgb = texture2D(uTexture, texture_uv).rgb;
-  float a = texture2D(uTexture, alpha_uv).r;
+  vec3 rgb = fixc(texture2D(uTexture, texture_uv).rgb);
+  float a = fixv(texture2D(uTexture, alpha_uv).r);
   if (a < 0.02) discard;
   gl_FragColor = vec4(rgb, a);
 }
@@ -147,7 +160,7 @@ const bgVert = `
 precision highp float;
 uniform sampler2D uTexture;
 varying vec2 vUv;
-` + decode12bit + `
+` + rangeFix + decode12bit + `
 void main() {
   vUv = uv;
   float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.0));
@@ -160,11 +173,12 @@ const bgFrag = `
 precision highp float;
 uniform sampler2D uTexture;
 varying vec2 vUv;
+` + rangeFix + `
 void main() {
   vec2 texture_uv = vec2(vUv.s * 0.33333, vUv.t * 0.33333);
   vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333);
-  float a = texture2D(uTexture, alpha_uv).r;
-  vec3 rgb = texture2D(uTexture, texture_uv).rgb;
+  float a = fixv(texture2D(uTexture, alpha_uv).r);
+  vec3 rgb = fixc(texture2D(uTexture, texture_uv).rgb);
   if (a < 0.02) discard;
   gl_FragColor = vec4(rgb, a);
 }
@@ -206,7 +220,7 @@ class Ldi3Mesh extends THREE.Object3D {
   constructor(decode_12bit, texture) {
     super();
     this.layer_to_meshes = Array.from({length: NUM_LAYERS}, () => []);
-    this.uniforms = { uTexture: { value: texture } };
+    this.uniforms = { uTexture: { value: texture }, uRangeFix: { value: rangeFixOn ? 1.0 : 0.0 } };
     const prefix = decode_12bit ? "#define DECODE_12BIT\n" : "";
 
     const mat0 = new THREE.ShaderMaterial({
@@ -288,6 +302,8 @@ let renderer, scene, mediaMesh = null, texture = null, video = null;
 let rtL = null, rtR = null, compositeScene, compositeCam, compositeMat;
 let dirty = true, photoMode = false, decode12 = true;
 let layerVisible = [true, true, true];
+let rangeFixOn = false, rangeProbed = false;
+let probeRT = null, probeMat = null, probeScene = null;
 
 // Camera rig: position + yaw/pitch; two eye cameras offset on local x.
 const rig = new THREE.Group();
@@ -354,6 +370,44 @@ function applyEyeOffsets() {
   dirty = true;
 }
 
+function setRangeFix(on) {
+  rangeFixOn = on;
+  document.getElementById('tvfix').checked = on;
+  if (mediaMesh) { mediaMesh.uniforms.uRangeFix.value = on ? 1.0 : 0.0; dirty = true; }
+}
+
+// Measure the values the video texture ACTUALLY delivers to WebGL by rendering
+// layer 0's alpha cell (guaranteed mostly white in LDI3) to a small target and
+// reading it back. Full range -> white ~255; unexpanded TV range -> white ~235.
+function probeVideoRangeGL() {
+  if (!texture) return;
+  if (!probeRT) {
+    probeRT = new THREE.WebGLRenderTarget(32, 32, { depthBuffer: false });
+    probeMat = new THREE.ShaderMaterial({
+      vertexShader: quadVert,
+      fragmentShader: `precision highp float; uniform sampler2D uTex; varying vec2 vUv;
+        void main() { gl_FragColor = texture2D(uTex, vec2(0.66666 + vUv.x * 0.33333, vUv.y * 0.33333)); }`,
+      uniforms: { uTex: { value: null } }, depthTest: false, depthWrite: false });
+    probeScene = new THREE.Scene();
+    probeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), probeMat));
+  }
+  probeMat.uniforms.uTex.value = texture;
+  renderer.setRenderTarget(probeRT);
+  renderer.clear(true, false, false);
+  renderer.render(probeScene, compositeCam);
+  const buf = new Uint8Array(32 * 32 * 4);
+  renderer.readRenderTargetPixels(probeRT, 0, 0, 32, 32, buf);
+  renderer.setRenderTarget(null);
+  const bright = [];
+  for (let i = 0; i < buf.length; i += 4) if (buf[i] > 180) bright.push(buf[i]);
+  if (bright.length < 50) return; // not enough white alpha to judge; keep current setting
+  bright.sort((a, b) => a - b);
+  const med = bright[bright.length >> 1];
+  rangeProbed = true;
+  setRangeFix(med < 245);
+  console.log("jg4d range probe: white median =", med, "-> tv-fix", med < 245);
+}
+
 function renderEye(cam, rt) {
   renderer.setRenderTarget(rt);
   renderer.clear(true, true, false);
@@ -389,6 +443,7 @@ function frame() {
   if (video && !('requestVideoFrameCallback' in video) && !video.paused && video.readyState >= 2) {
     texture.needsUpdate = true;
     dirty = true;
+    if (!rangeProbed) probeVideoRangeGL();
   }
 
   if (!dirty || !mediaMesh) return;
@@ -435,15 +490,18 @@ function loadMedia(url, name) {
 
   if (ext === "jpg" || ext === "jpeg" || ext === "png") {
     photoMode = true;
+    rangeFixOn = false; rangeProbed = true; // image decode is always full-range
     texture = new THREE.TextureLoader().setCrossOrigin('anonymous').load(url,
       () => { dirty = true; },
       undefined,
       () => setError("failed to load image: " + (name || url)));
     configureTexture(texture);
     buildMesh();
+    setRangeFix(false);
     updatePlayBtn();
   } else {
     photoMode = false;
+    rangeFixOn = false; rangeProbed = false; // probe decides once frames arrive
     video = document.createElement('video');
     video.setAttribute('crossorigin', 'anonymous');
     video.setAttribute('playsinline', '');
@@ -464,6 +522,7 @@ function loadMedia(url, name) {
         if (!video) return;
         texture.needsUpdate = true;
         dirty = true;
+        if (!rangeProbed && video.readyState >= 2) probeVideoRangeGL();
         video.requestVideoFrameCallback(onFrame);
       };
       video.requestVideoFrameCallback(onFrame);
@@ -549,6 +608,10 @@ document.getElementById('ipd').addEventListener('input', e => {
 document.getElementById('bit12').addEventListener('change', e => {
   decode12 = e.target.checked;
   if (texture) buildMesh();
+});
+document.getElementById('tvfix').addEventListener('change', e => {
+  rangeProbed = true; // manual override wins over auto-detection
+  setRangeFix(e.target.checked);
 });
 document.getElementById('halfres').addEventListener('change', e => {
   halfRes = e.target.checked; makeRenderTargets();
