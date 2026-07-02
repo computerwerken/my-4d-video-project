@@ -58,6 +58,14 @@ struct LdiPipelineConfig {
   bool make_fused_image;
   int inpaint_dilate_radius;
   bool skip_every_other_frame;
+
+  // Depth model selection: "raft" (original), "da3_fused" (RAFT disparity fused with
+  // Depth Anything 3 stereo), "da3_only" (DA3 structure, scale-aligned to RAFT).
+  std::string depth_method = "raft";
+  // For da3_fused: 0 = pure stereo disparity, 1 = pure (aligned) DA3.
+  double da3_blend = 0.6;
+  // Optional override path for the DA3 TorchScript model.
+  std::string da3_model_path;
 };
 
 inline void printConfig(const LdiPipelineConfig& cfg) {
