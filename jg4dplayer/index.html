@@ -54,11 +54,12 @@
 <div id="app"></div>
 <div id="hud">
   <img src="jgcat_64.png" alt="">
-  <span class="title">jg 4d player</span><span id="ver" style="opacity:.55">v3</span>
+  <span class="title">jg 4d player</span><span id="ver" style="opacity:.55">v4</span>
   <button id="open_btn" title="Open a *_ldi3.mp4 or *_ldi3.jpg file">open</button>
   <input type="file" id="file_input" accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
   <button id="play_btn" title="Space">play</button>
-  <label title="Interaxial separation (mm)">ipd <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span id="ipd_val">63</span></label>
+  <label title="Interaxial separation (mm) — overall 3D strength">ipd <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span id="ipd_val">63</span></label>
+  <label title="Stereo window: content at this distance appears exactly on the screen; nearer content pops out toward the audience ([ and ] keys)">scrn <input type="range" id="conv" min="0" max="100" step="1" value="50"><span id="conv_val">3.9m</span></label>
   <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
   <label title="Expand TV-range (limited) video levels — auto-detected; toggle if depth looks flat or colors washed out"><input type="checkbox" id="tvfix"> tv-fix</label>
   <label title="Render eyes at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
@@ -70,7 +71,7 @@
   <img src="jgcat.png" alt="">
   drag &amp; drop an LDI3 file (*_ldi3.mp4 / *_ldi3.jpg), or use <b>open</b><br>
   drag = look &nbsp;·&nbsp; W A S D + Q E / scroll = move &nbsp;·&nbsp; space = play/pause<br>
-  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; 1/2/3 = toggle layers &nbsp;·&nbsp; G = raw grid<br>
+  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; [ ] = stereo window &nbsp;·&nbsp; 1/2/3 = layers &nbsp;·&nbsp; G = raw grid<br>
   <span style="color:#777">wear red-cyan glasses (red over left eye)</span>
 </div>
 <div id="err"></div>
@@ -313,6 +314,7 @@ const eyeL = new THREE.PerspectiveCamera(80, 1, 0.1, 110);
 const eyeR = new THREE.PerspectiveCamera(80, 1, 0.1, 110);
 rig.add(eyeL); rig.add(eyeR);
 let yaw = 0, pitch = 0, ipdM = 0.063, swapEyes = false, halfRes = false;
+let focusM = 3.9; // stereo window (convergence) distance in meters
 const keys = new Set();
 
 function setError(msg) { errDiv.textContent = msg || ""; }
@@ -358,18 +360,39 @@ function makeRenderTargets() {
 }
 
 function onResize() {
-  const aspect = window.innerWidth / window.innerHeight;
-  eyeL.aspect = aspect; eyeL.updateProjectionMatrix();
-  eyeR.aspect = aspect; eyeR.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  applyEyeOffsets(); // recomputes the off-axis projections for the new aspect
   makeRenderTargets();
 }
 
+// Off-axis (lens-shift) stereo: both eye frusta are skewed so they coincide at
+// focusM. Content at focusM has zero disparity (= at the physical screen);
+// nearer content gets crossed disparity and pops OUT of the screen. This is the
+// projection-shift method (comfortable), not toe-in rotation (keystone/ghosts).
 function applyEyeOffsets() {
+  const aspect = window.innerWidth / window.innerHeight;
+  const near = 0.1, far = 110;
   const half = ipdM / 2;
-  eyeL.position.set(swapEyes ? half : -half, 0, 0);
-  eyeR.position.set(swapEyes ? -half : half, 0, 0);
+  const xL = swapEyes ? half : -half;
+  const xR = swapEyes ? -half : half;
+  eyeL.position.set(xL, 0, 0);
+  eyeR.position.set(xR, 0, 0);
+  const ymax = near * Math.tan(80 * Math.PI / 360);
+  const xmax = ymax * aspect;
+  for (const [eye, ox] of [[eyeL, xL], [eyeR, xR]]) {
+    const shift = -ox * near / focusM;
+    eye.projectionMatrix.makePerspective(-xmax + shift, xmax + shift, ymax, -ymax, near, far);
+    eye.projectionMatrixInverse.copy(eye.projectionMatrix).invert();
+  }
   dirty = true;
+}
+
+function setFocus(f) {
+  focusM = Math.min(50, Math.max(0.3, f));
+  const slider = document.getElementById('conv');
+  slider.value = Math.round(100 * Math.log(focusM / 0.5) / Math.log(60));
+  document.getElementById('conv_val').textContent = focusM.toFixed(1) + "m";
+  applyEyeOffsets();
 }
 
 function setRangeFix(on) {
@@ -596,6 +619,8 @@ window.addEventListener('keydown', e => {
   else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
   else if (k === "m") { if (video) video.muted = !video.muted; }
   else if (k === "g") { debugGrid = !debugGrid; dirty = true; }
+  else if (k === "[") { setFocus(focusM / 1.15); }
+  else if (k === "]") { setFocus(focusM * 1.15); }
   else if (k === "1" || k === "2" || k === "3") {
     const l = parseInt(k) - 1; layerVisible[l] = !layerVisible[l]; dirty = true;
   }
@@ -611,8 +636,12 @@ function toggleFullscreen() {
 let hudTimer;
 function showHud() {
   hud.classList.remove('hidden');
+  app.style.cursor = '';
   clearTimeout(hudTimer);
-  hudTimer = setTimeout(() => hud.classList.add('hidden'), 3000);
+  hudTimer = setTimeout(() => {
+    hud.classList.add('hidden');
+    app.style.cursor = 'none'; // clean screen for exhibition
+  }, 3000);
 }
 showHud();
 
@@ -627,6 +656,11 @@ document.getElementById('fs_btn').onclick = toggleFullscreen;
 document.getElementById('ipd').addEventListener('input', e => {
   ipdM = e.target.value / 1000;
   document.getElementById('ipd_val').textContent = e.target.value;
+  applyEyeOffsets();
+});
+document.getElementById('conv').addEventListener('input', e => {
+  focusM = 0.5 * Math.pow(60, e.target.value / 100); // log scale 0.5m..30m
+  document.getElementById('conv_val').textContent = focusM.toFixed(1) + "m";
   applyEyeOffsets();
 });
 document.getElementById('bit12').addEventListener('change', e => {
