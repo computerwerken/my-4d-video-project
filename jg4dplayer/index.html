@@ -54,7 +54,7 @@
 <div id="app"></div>
 <div id="hud">
   <img src="jgcat_64.png" alt="">
-  <span class="title">jg 4d player</span>
+  <span class="title">jg 4d player</span><span id="ver" style="opacity:.55">v3</span>
   <button id="open_btn" title="Open a *_ldi3.mp4 or *_ldi3.jpg file">open</button>
   <input type="file" id="file_input" accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
   <button id="play_btn" title="Space">play</button>
@@ -70,7 +70,7 @@
   <img src="jgcat.png" alt="">
   drag &amp; drop an LDI3 file (*_ldi3.mp4 / *_ldi3.jpg), or use <b>open</b><br>
   drag = look &nbsp;·&nbsp; W A S D + Q E / scroll = move &nbsp;·&nbsp; space = play/pause<br>
-  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; 1/2/3 = toggle layers<br>
+  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; 1/2/3 = toggle layers &nbsp;·&nbsp; G = raw grid<br>
   <span style="color:#777">wear red-cyan glasses (red over left eye)</span>
 </div>
 <div id="err"></div>
@@ -304,6 +304,8 @@ let dirty = true, photoMode = false, decode12 = true;
 let layerVisible = [true, true, true];
 let rangeFixOn = false, rangeProbed = false;
 let probeRT = null, probeMat = null, probeScene = null;
+let debugGrid = false, debugScene = null, debugMat = null;
+console.log("jg4d player build v3 (single-pass compositing + tv-range autodetect)");
 
 // Camera rig: position + yaw/pitch; two eye cameras offset on local x.
 const rig = new THREE.Group();
@@ -451,6 +453,25 @@ function frame() {
   if (!dirty || !mediaMesh) return;
   dirty = false;
 
+  // Diagnostic view (G): draw the raw texture flat so the 3x3 LDI grid is
+  // visible exactly as the shaders see it (layer 0 row at the BOTTOM).
+  if (debugGrid) {
+    if (!debugScene) {
+      debugMat = new THREE.ShaderMaterial({
+        vertexShader: quadVert,
+        fragmentShader: `precision highp float; uniform sampler2D uTex; varying vec2 vUv;
+          void main() { gl_FragColor = vec4(texture2D(uTex, vUv).rgb, 1.0); }`,
+        uniforms: { uTex: { value: null } }, depthTest: false, depthWrite: false });
+      debugScene = new THREE.Scene();
+      debugScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), debugMat));
+    }
+    debugMat.uniforms.uTex.value = texture;
+    renderer.setRenderTarget(null);
+    renderer.clear(true, true, false);
+    renderer.render(debugScene, compositeCam);
+    return;
+  }
+
   rig.rotation.set(0, 0, 0);
   rig.rotateY(yaw);
   rig.rotateX(pitch);
@@ -574,6 +595,7 @@ window.addEventListener('keydown', e => {
   else if (k === "f") toggleFullscreen();
   else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
   else if (k === "m") { if (video) video.muted = !video.muted; }
+  else if (k === "g") { debugGrid = !debugGrid; dirty = true; }
   else if (k === "1" || k === "2" || k === "3") {
     const l = parseInt(k) - 1; layerVisible[l] = !layerVisible[l]; dirty = true;
   }
