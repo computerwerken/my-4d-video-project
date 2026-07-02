@@ -1311,7 +1311,7 @@ struct LdiStudio : public DearImGuiApp {
       }
 
       if (ImGui::BeginMenu("Settings")) {
-        if (ImGui::MenuItem("About Volumetric Video Editor")) {
+        if (ImGui::MenuItem("About jg stereo editor")) {
           showAboutVVEDialog();
         }
 
@@ -2701,7 +2701,7 @@ struct LdiStudio : public DearImGuiApp {
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(glfw_window_w, glfw_window_h), ImGuiCond_Always);
 
-    std::string window_title = std::string() + "Lifecast Volumetric Video Editor" +
+    std::string window_title = std::string() + "Lifecast jg stereo editor" +
                                (project_dir.empty() ? " - Select Project Directory" : " - ") +
                                project_dir;
     glfwSetWindowTitle(window, window_title.c_str());
@@ -2814,7 +2814,7 @@ int main(int argc, char** argv) {
   LoadLibraryA("torch_cuda.dll"); // Fix CUDA not found in libtorch, https://github.com/pytorch/pytorch/issues/72396
 #endif
 
-  p11::app.init("Lifecast Volumetric Video Editor", 1280, 720);
+  p11::app.init("Lifecast jg stereo editor", 1280, 720);
   glfwSetMouseButtonCallback(p11::app.window, p11::mouse_button_callback);
   glfwSetScrollCallback(p11::app.window, p11::scroll_callback);
   glfwSetKeyCallback(p11::app.window, p11::key_callback);
