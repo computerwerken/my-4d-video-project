@@ -550,6 +550,27 @@ p11_cc_library(
 )
 
 p11_cc_library(
+  name = "depth_anything3",
+  hdrs = ["depth_anything3.h"],
+  srcs = ["depth_anything3.cc"],
+  deps = [
+    ":logger",
+    "//source:gflags_xplatform",
+    ":opencv_xplatform",
+    ":libtorch_xplatform",
+    ":util_runfile",
+    ":util_time",
+    ":util_math",
+    ":util_torch",
+    "//external:eigen",
+  ],
+  # NOTE: no data model dep yet, so the repo builds without the DA3 model file.
+  # After exporting ml_models/da3_stereo.pt, add it to ml_models/BUILD and here:
+  #   data = ["//ml_models:da3_stereo.pt"],
+  # Until then, DA3 modes need cfg.da3_model_path set to an absolute path.
+)
+
+p11_cc_library(
   name = "inpaint_ceres",
   hdrs = ["inpaint_ceres.h"],
   deps = [
@@ -1172,6 +1193,7 @@ p11_cc_library (
     ":util_opencv",
     ":ldi_common",
     ":ldi_segmentation",
+    ":depth_anything3",
   ],
 )
 
