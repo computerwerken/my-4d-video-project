@@ -408,15 +408,17 @@ function probeVideoRangeGL() {
   console.log("jg4d range probe: white median =", med, "-> tv-fix", med < 245);
 }
 
+// Render all layers in a SINGLE render() call, ordered by mesh.renderOrder.
+// Multiple sequential render() calls into one multisampled render target break
+// in three.js: each call resolves + invalidates the MSAA buffer, so only the
+// last call's content survives (symptom: only layer 2 visible on real LDI3s
+// with properly-peeled layers).
 function renderEye(cam, rt) {
   renderer.setRenderTarget(rt);
   renderer.clear(true, true, false);
-  for (let l = 0; l < NUM_LAYERS; ++l) {
-    if (!layerVisible[l]) continue;
-    for (let k = 0; k < NUM_LAYERS; ++k)
-      for (const m of mediaMesh.layer_to_meshes[k]) m.visible = (k === l);
-    renderer.render(scene, cam);
-  }
+  for (let k = 0; k < NUM_LAYERS; ++k)
+    for (const m of mediaMesh.layer_to_meshes[k]) m.visible = layerVisible[k];
+  renderer.render(scene, cam);
 }
 
 let lastT = performance.now();
