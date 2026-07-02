@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>jg 4d player</title>
+<link rel="icon" href="jgcat_64.png">
+<link rel="apple-touch-icon" href="jgcat.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#000000">
+<!--
+  jg 4d player — fullscreen LDI3 video/photo player with Dubois red-cyan anaglyph output.
+  LDI3 decoding (mesh + shaders) adapted from Lifecast's open-source player
+  (MIT License, Copyright (c) 2021-2024 Lifecast Incorporated; see /web/lifecast_res in this repo).
+  Anaglyph compositing uses Eric Dubois' least-squares matrices.
+-->
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+  #hud {
+    position:fixed; top:0; left:0; right:0; padding:10px 14px;
+    display:flex; align-items:center; gap:14px;
+    font-family:ui-monospace, Menlo, Consolas, monospace; font-size:13px; color:#eee;
+    background:linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0));
+    transition:opacity .4s; z-index:10; user-select:none; -webkit-user-select:none;
+  }
+  #hud.hidden { opacity:0; pointer-events:none; }
+  #hud img { width:28px; height:28px; image-rendering:pixelated; }
+  #hud .title { font-weight:bold; letter-spacing:.5px; }
+  #hud button, #hud label {
+    background:rgba(255,255,255,.12); color:#eee; border:1px solid rgba(255,255,255,.25);
+    border-radius:6px; padding:4px 10px; font:inherit; cursor:pointer; display:flex; align-items:center; gap:6px;
+  }
+  #hud button:hover { background:rgba(255,255,255,.25); }
+  #hud input[type=range] { width:90px; }
+  #hud .spacer { flex:1; }
+  #hint {
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    color:#bbb; font-family:ui-monospace, Menlo, Consolas, monospace; font-size:14px;
+    text-align:center; line-height:1.9; z-index:5; pointer-events:none; text-shadow:0 1px 3px #000;
+  }
+  #hint img { width:96px; height:96px; image-rendering:pixelated; display:block; margin:0 auto 10px; }
+  #err { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); color:#ff7a7a;
+         font-family:ui-monospace, monospace; font-size:13px; z-index:20; text-shadow:0 1px 3px #000; }
+  #drop.active::after {
+    content:"drop LDI3 file"; position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,120,255,.15); border:3px dashed rgba(0,160,255,.7);
+    color:#fff; font:bold 24px ui-monospace, monospace; z-index:30;
+  }
+</style>
+</head>
+<body id="drop">
+<div id="app"></div>
+<div id="hud">
+  <img src="jgcat_64.png" alt="">
+  <span class="title">jg 4d player</span>
+  <button id="open_btn" title="Open a *_ldi3.mp4 or *_ldi3.jpg file">open</button>
+  <input type="file" id="file_input" accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
+  <button id="play_btn" title="Space">play</button>
+  <label title="Interaxial separation (mm)">ipd <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span id="ipd_val">63</span></label>
+  <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
+  <label title="Render eyes at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
+  <label title="Swap left/right eyes"><input type="checkbox" id="swap"> swap</label>
+  <span class="spacer"></span>
+  <button id="fs_btn" title="F">fullscreen</button>
+</div>
+<div id="hint">
+  <img src="jgcat.png" alt="">
+  drag &amp; drop an LDI3 file (*_ldi3.mp4 / *_ldi3.jpg), or use <b>open</b><br>
+  drag = look &nbsp;·&nbsp; W A S D + Q E / scroll = move &nbsp;·&nbsp; space = play/pause<br>
+  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; 1/2/3 = toggle layers<br>
+  <span style="color:#777">wear red-cyan glasses (red over left eye)</span>
+</div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+
+// ============================== LDI3 shaders =================================
+// Adapted from Lifecast's LifecastVideoPlayerShaders11.js (MIT License,
+// Copyright (c) 2021 Lifecast Incorporated). Intro-transition code removed.
+const decode12bit = `
+float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
+#if defined(DECODE_12BIT)
+  vec2 depth_uv_lo = cell_offset + (depth_uv_unscaled + vec2(0.0, 1.0)) * 0.33333333 * 0.5;
+  vec2 depth_uv_hi = cell_offset + (depth_uv_unscaled + vec2(1.0, 1.0)) * 0.33333333 * 0.5;
+  ivec2 texture_size = textureSize(uTexture, 0);
+  ivec2 texel_coord_lo = ivec2(vec2(texture_size) * depth_uv_lo);
+  ivec2 texel_coord_hi = ivec2(vec2(texture_size) * depth_uv_hi);
+  float ds_lo = texelFetch(uTexture, texel_coord_lo, 0).r;
+  float ds_hi = texelFetch(uTexture, texel_coord_hi, 0).r;
+  int lo = int(ds_lo * 255.0) & 255;
+  int hi = int(ds_hi * 255.0) & 255;
+  hi = hi / 16;
+  lo = (hi & 1) == 0 ? lo : 255 - lo;
+  int i12 = (lo & 255) | ((hi & 15) << 8);
+  float f12 = float(i12) / float((1 << 12) - 1);
+  return clamp(f12, 0.0001, 1.0);
+#else
+  vec2 depth_uv_8bit = cell_offset + depth_uv_unscaled * 0.33333;
+  ivec2 texture_size = textureSize(uTexture, 0);
+  ivec2 texel_coord = ivec2(vec2(texture_size) * depth_uv_8bit);
+  float v = texelFetch(uTexture, texel_coord, 0).r;
+  return clamp(v, 0.0001, 1.0);
+#endif
+}
+`;
+
+const fgVert = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+` + decode12bit + `
+void main() {
+  vUv = uv;
+#if defined(LAYER2)
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.66666666));
+#else
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.33333333));
+#endif
+  float s = clamp(0.3 / depth_sample, 0.01, 50.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
+}
+`;
+
+const fgFrag = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+void main() {
+#if defined(LAYER2)
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.66666);
+  vec2 texture_uv = vec2(vUv.s * 0.33333,           vUv.t * 0.33333 + 0.66666);
+#else
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.33333);
+  vec2 texture_uv = vec2(vUv.s * 0.33333,           vUv.t * 0.33333 + 0.33333);
+#endif
+  vec3 rgb = texture2D(uTexture, texture_uv).rgb;
+  float a = texture2D(uTexture, alpha_uv).r;
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(rgb, a);
+}
+`;
+
+const bgVert = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+` + decode12bit + `
+void main() {
+  vUv = uv;
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.0));
+  float s = clamp(0.3 / depth_sample, 0.01, 50.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
+}
+`;
+
+const bgFrag = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+void main() {
+  vec2 texture_uv = vec2(vUv.s * 0.33333, vUv.t * 0.33333);
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333);
+  float a = texture2D(uTexture, alpha_uv).r;
+  vec3 rgb = texture2D(uTexture, texture_uv).rgb;
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(rgb, a);
+}
+`;
+
+// Dubois least-squares red-cyan matrices, applied in linearized RGB.
+const anaglyphFrag = `
+precision highp float;
+uniform sampler2D texL, texR;
+varying vec2 vUv;
+const mat3 M_L = mat3(
+   0.4561000, -0.0400822, -0.0152161,
+   0.5004840, -0.0378246, -0.0205971,
+   0.1763810, -0.0157589, -0.0054686);
+const mat3 M_R = mat3(
+  -0.0434706,  0.3784760, -0.0721527,
+  -0.0879388,  0.7336400, -0.1129610,
+  -0.0015553, -0.0180517,  1.2264000);
+vec3 lin(vec3 c)   { return pow(max(c, 0.0), vec3(2.2)); }
+vec3 delin(vec3 c) { return pow(max(c, 0.0), vec3(1.0/2.2)); }
+void main() {
+  vec3 l = lin(texture2D(texL, vUv).rgb);
+  vec3 r = lin(texture2D(texR, vUv).rgb);
+  gl_FragColor = vec4(delin(clamp(M_L * l + M_R * r, 0.0, 1.0)), 1.0);
+}
+`;
+
+const quadVert = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+
+// ============================== LDI3 mesh ====================================
+// Adapted from Lifecast's Ldi3Mesh.js (MIT License).
+const NUM_LAYERS = 3;
+const FTHETA_SCALE = 1.15;
+
+class Ldi3Mesh extends THREE.Object3D {
+  constructor(decode_12bit, texture) {
+    super();
+    this.layer_to_meshes = Array.from({length: NUM_LAYERS}, () => []);
+    this.uniforms = { uTexture: { value: texture } };
+    const prefix = decode_12bit ? "#define DECODE_12BIT\n" : "";
+
+    const mat0 = new THREE.ShaderMaterial({
+      vertexShader: prefix + bgVert, fragmentShader: prefix + bgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat0.side = THREE.BackSide; mat0.depthFunc = THREE.LessDepth;
+
+    const mat1 = new THREE.ShaderMaterial({
+      vertexShader: prefix + fgVert, fragmentShader: prefix + fgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat1.side = THREE.BackSide; mat1.depthFunc = THREE.LessEqualDepth;
+
+    const mat2 = new THREE.ShaderMaterial({
+      vertexShader: "#define LAYER2\n" + prefix + fgVert,
+      fragmentShader: "#define LAYER2\n" + prefix + fgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat2.side = THREE.BackSide; mat2.depthFunc = THREE.LessEqualDepth;
+
+    this.materials = [mat0, mat1, mat2];
+    const inflation = 3.0;
+    this.makeEquiangularMesh(mat0, 128, 4, 0, inflation);
+    this.makeEquiangularMesh(mat1, 128, 4, 1, inflation);
+    this.makeEquiangularMesh(mat2, 96, 4, 2, inflation);
+  }
+
+  makeEquiangularMesh(material, GRID_SIZE, NUM_PATCHES, order, ftheta_inflation) {
+    const NUM_QUADS_PER_SIDE = NUM_PATCHES * GRID_SIZE;
+    const MARGIN = 2;
+    for (let patch_j = 0; patch_j < NUM_PATCHES; ++patch_j)
+    for (let patch_i = 0; patch_i < NUM_PATCHES; ++patch_i) {
+      const verts = [], indices = [], uvs = [];
+      for (let j = 0; j <= GRID_SIZE; ++j)
+      for (let i = 0; i <= GRID_SIZE; ++i) {
+        const ii = i + patch_i * GRID_SIZE, jj = j + patch_j * GRID_SIZE;
+        const u = ii / NUM_QUADS_PER_SIDE, v = jj / NUM_QUADS_PER_SIDE;
+        const a = 2.0 * (u - 0.5), b = 2.0 * (v - 0.5);
+        const theta = Math.atan2(b, a);
+        let r = Math.sqrt(a * a + b * b) / FTHETA_SCALE;
+        r = 0.5 * r + 0.5 * Math.pow(r, ftheta_inflation);
+        const phi = r * Math.PI / 2.0;
+        verts.push(Math.cos(theta) * Math.sin(phi), Math.sin(theta) * Math.sin(phi), -Math.cos(phi));
+        uvs.push(u, v);
+      }
+      for (let j = 0; j < GRID_SIZE; ++j)
+      for (let i = 0; i < GRID_SIZE; ++i) {
+        const ii = i + patch_i * GRID_SIZE, jj = j + patch_j * GRID_SIZE;
+        const di = ii - NUM_QUADS_PER_SIDE / 2, dj = jj - NUM_QUADS_PER_SIDE / 2;
+        if (di * di + dj * dj > (NUM_QUADS_PER_SIDE + MARGIN) * (NUM_QUADS_PER_SIDE + MARGIN) / 4) continue;
+        const a = i + (GRID_SIZE + 1) * j, b = a + 1, c = a + (GRID_SIZE + 1), d = c + 1;
+        indices.push(a, c, b, c, d, b);
+      }
+      if (indices.length > 0) {
+        const g = new THREE.BufferGeometry();
+        g.setIndex(indices);
+        g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        const mesh = new THREE.Mesh(g, material);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = order;
+        this.layer_to_meshes[order].push(mesh);
+        this.add(mesh);
+      }
+    }
+  }
+
+  dispose() {
+    for (const layer of this.layer_to_meshes) for (const m of layer) m.geometry.dispose();
+    for (const m of this.materials) m.dispose();
+  }
+}
+
+// ============================== player =======================================
+const app = document.getElementById('app');
+const hud = document.getElementById('hud');
+const hint = document.getElementById('hint');
+const errDiv = document.getElementById('err');
+
+let renderer, scene, mediaMesh = null, texture = null, video = null;
+let rtL = null, rtR = null, compositeScene, compositeCam, compositeMat;
+let dirty = true, photoMode = false, decode12 = true;
+let layerVisible = [true, true, true];
+
+// Camera rig: position + yaw/pitch; two eye cameras offset on local x.
+const rig = new THREE.Group();
+const eyeL = new THREE.PerspectiveCamera(80, 1, 0.1, 110);
+const eyeR = new THREE.PerspectiveCamera(80, 1, 0.1, 110);
+rig.add(eyeL); rig.add(eyeR);
+let yaw = 0, pitch = 0, ipdM = 0.063, swapEyes = false, halfRes = false;
+const keys = new Set();
+
+function setError(msg) { errDiv.textContent = msg || ""; }
+
+function init() {
+  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+  renderer.autoClear = false;
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  app.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  scene.add(rig);
+
+  compositeScene = new THREE.Scene();
+  compositeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  compositeMat = new THREE.ShaderMaterial({
+    vertexShader: quadVert, fragmentShader: anaglyphFrag,
+    uniforms: { texL: { value: null }, texR: { value: null } },
+    depthTest: false, depthWrite: false });
+  compositeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), compositeMat));
+
+  makeRenderTargets();
+  applyEyeOffsets();
+  window.addEventListener('resize', onResize);
+  renderer.setAnimationLoop(frame);
+}
+
+function makeRenderTargets() {
+  if (rtL) { rtL.dispose(); rtR.dispose(); }
+  const scale = halfRes ? 0.5 : 1.0;
+  const w = Math.max(2, Math.floor(window.innerWidth * window.devicePixelRatio * scale));
+  const h = Math.max(2, Math.floor(window.innerHeight * window.devicePixelRatio * scale));
+  const opts = { format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+                 minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                 depthBuffer: true, samples: halfRes ? 0 : 4 };
+  rtL = new THREE.WebGLRenderTarget(w, h, opts);
+  rtR = new THREE.WebGLRenderTarget(w, h, opts);
+  compositeMat.uniforms.texL.value = rtL.texture;
+  compositeMat.uniforms.texR.value = rtR.texture;
+  dirty = true;
+}
+
+function onResize() {
+  const aspect = window.innerWidth / window.innerHeight;
+  eyeL.aspect = aspect; eyeL.updateProjectionMatrix();
+  eyeR.aspect = aspect; eyeR.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  makeRenderTargets();
+}
+
+function applyEyeOffsets() {
+  const half = ipdM / 2;
+  eyeL.position.set(swapEyes ? half : -half, 0, 0);
+  eyeR.position.set(swapEyes ? -half : half, 0, 0);
+  dirty = true;
+}
+
+function renderEye(cam, rt) {
+  renderer.setRenderTarget(rt);
+  renderer.clear(true, true, false);
+  for (let l = 0; l < NUM_LAYERS; ++l) {
+    if (!layerVisible[l]) continue;
+    for (let k = 0; k < NUM_LAYERS; ++k)
+      for (const m of mediaMesh.layer_to_meshes[k]) m.visible = (k === l);
+    renderer.render(scene, cam);
+  }
+}
+
+let lastT = performance.now();
+function frame() {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastT) / 1000);
+  lastT = now;
+
+  // WASD / QE movement in look direction
+  if (keys.size > 0 && mediaMesh) {
+    const speed = (keys.has('shift') ? 4.5 : 1.5) * dt;
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    if (keys.has('w')) rig.position.addScaledVector(fwd, speed);
+    if (keys.has('s')) rig.position.addScaledVector(fwd, -speed);
+    if (keys.has('a')) rig.position.addScaledVector(right, -speed);
+    if (keys.has('d')) rig.position.addScaledVector(right, speed);
+    if (keys.has('q')) rig.position.y -= speed;
+    if (keys.has('e')) rig.position.y += speed;
+    dirty = true;
+  }
+
+  // Safari fallback: no requestVideoFrameCallback -> update every frame while playing
+  if (video && !('requestVideoFrameCallback' in video) && !video.paused && video.readyState >= 2) {
+    texture.needsUpdate = true;
+    dirty = true;
+  }
+
+  if (!dirty || !mediaMesh) return;
+  dirty = false;
+
+  rig.rotation.set(0, 0, 0);
+  rig.rotateY(yaw);
+  rig.rotateX(pitch);
+
+  renderEye(eyeL, rtL);
+  renderEye(eyeR, rtR);
+  renderer.setRenderTarget(null);
+  renderer.clear(true, true, false);
+  renderer.render(compositeScene, compositeCam);
+}
+
+// ============================== media loading ================================
+function disposeMedia() {
+  if (mediaMesh) { scene.remove(mediaMesh); mediaMesh.dispose(); mediaMesh = null; }
+  if (texture) { texture.dispose(); texture = null; }
+  if (video) { video.pause(); video.removeAttribute('src'); video.load(); video.remove(); video = null; }
+}
+
+function buildMesh() {
+  if (mediaMesh) { scene.remove(mediaMesh); mediaMesh.dispose(); }
+  mediaMesh = new Ldi3Mesh(decode12, texture);
+  scene.add(mediaMesh);
+  dirty = true;
+}
+
+function configureTexture(t) {
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+}
+
+function loadMedia(url, name) {
+  setError("");
+  disposeMedia();
+  hint.style.display = "none";
+  const ext = (name || url).split('?')[0].split('.').pop().toLowerCase();
+
+  if (ext === "jpg" || ext === "jpeg" || ext === "png") {
+    photoMode = true;
+    texture = new THREE.TextureLoader().setCrossOrigin('anonymous').load(url,
+      () => { dirty = true; },
+      undefined,
+      () => setError("failed to load image: " + (name || url)));
+    configureTexture(texture);
+    buildMesh();
+    updatePlayBtn();
+  } else {
+    photoMode = false;
+    video = document.createElement('video');
+    video.setAttribute('crossorigin', 'anonymous');
+    video.setAttribute('playsinline', '');
+    video.loop = true;
+    video.muted = true;       // required for autoplay; M to unmute
+    video.preload = "auto";
+    video.style.display = "none";
+    video.src = url;
+    document.body.appendChild(video);
+    video.addEventListener('error', () => setError("failed to load video: " + (name || url)));
+
+    texture = new THREE.VideoTexture(video);
+    configureTexture(texture);
+    buildMesh();
+
+    if ('requestVideoFrameCallback' in video) {
+      const onFrame = () => {
+        if (!video) return;
+        texture.needsUpdate = true;
+        dirty = true;
+        video.requestVideoFrameCallback(onFrame);
+      };
+      video.requestVideoFrameCallback(onFrame);
+    }
+    video.play().catch(() => { /* wait for user gesture */ });
+    updatePlayBtn();
+  }
+}
+
+function togglePlay() {
+  if (!video) return;
+  if (video.paused || video.ended) video.play(); else video.pause();
+  setTimeout(updatePlayBtn, 50);
+}
+function updatePlayBtn() {
+  const b = document.getElementById('play_btn');
+  b.style.display = photoMode || !video ? "none" : "";
+  if (video) b.textContent = (video.paused || video.ended) ? "play" : "pause";
+}
+
+// ============================== input ========================================
+let dragging = false;
+init();
+
+app.addEventListener('mousedown', e => { if (e.button === 0) dragging = true; });
+window.addEventListener('mouseup', e => { if (e.button === 0) dragging = false; });
+window.addEventListener('mousemove', e => {
+  showHud();
+  if (!dragging) return;
+  yaw -= e.movementX * 0.0022;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0022));
+  dirty = true;
+});
+app.addEventListener('wheel', e => {
+  e.preventDefault();
+  const fwd = new THREE.Vector3(
+    -Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
+  rig.position.addScaledVector(fwd, -e.deltaY * 0.002);
+  dirty = true;
+}, { passive: false });
+app.addEventListener('dblclick', toggleFullscreen);
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (["w","a","s","d","q","e","shift"].includes(k)) { keys.add(k); return; }
+  if (k === " ") { e.preventDefault(); togglePlay(); }
+  else if (k === "f") toggleFullscreen();
+  else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
+  else if (k === "m") { if (video) video.muted = !video.muted; }
+  else if (k === "1" || k === "2" || k === "3") {
+    const l = parseInt(k) - 1; layerVisible[l] = !layerVisible[l]; dirty = true;
+  }
+});
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+}
+
+// HUD auto-hide
+let hudTimer;
+function showHud() {
+  hud.classList.remove('hidden');
+  clearTimeout(hudTimer);
+  hudTimer = setTimeout(() => hud.classList.add('hidden'), 3000);
+}
+showHud();
+
+// HUD controls
+document.getElementById('open_btn').onclick = () => document.getElementById('file_input').click();
+document.getElementById('file_input').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (f) loadMedia(URL.createObjectURL(f), f.name);
+});
+document.getElementById('play_btn').onclick = togglePlay;
+document.getElementById('fs_btn').onclick = toggleFullscreen;
+document.getElementById('ipd').addEventListener('input', e => {
+  ipdM = e.target.value / 1000;
+  document.getElementById('ipd_val').textContent = e.target.value;
+  applyEyeOffsets();
+});
+document.getElementById('bit12').addEventListener('change', e => {
+  decode12 = e.target.checked;
+  if (texture) buildMesh();
+});
+document.getElementById('halfres').addEventListener('change', e => {
+  halfRes = e.target.checked; makeRenderTargets();
+});
+document.getElementById('swap').addEventListener('change', e => {
+  swapEyes = e.target.checked; applyEyeOffsets();
+});
+
+// Drag & drop
+const dropEl = document.getElementById('drop');
+window.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('active'); });
+window.addEventListener('dragleave', e => { if (e.relatedTarget === null) dropEl.classList.remove('active'); });
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  dropEl.classList.remove('active');
+  const f = e.dataTransfer.files[0];
+  if (f) loadMedia(URL.createObjectURL(f), f.name);
+});
+
+// ?src= URL parameter
+const src = new URLSearchParams(window.location.search).get('src');
+if (src) loadMedia(src);
+</script>
+</body>
+</html>

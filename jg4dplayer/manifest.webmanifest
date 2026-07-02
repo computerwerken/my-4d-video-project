@@ -1,0 +1,12 @@
+{
+  "name": "jg 4d player",
+  "short_name": "jg4d",
+  "start_url": ".",
+  "display": "fullscreen",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "jgcat.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "jgcat_64.png", "sizes": "64x64", "type": "image/png" }
+  ]
+}
