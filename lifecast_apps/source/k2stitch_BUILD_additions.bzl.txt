@@ -1,0 +1,49 @@
+# ------------------------------------------------------------------------------
+# k2stitch: Z CAM K2 Pro dual-fisheye -> VR180 SBS equirect for VVE ingest.
+# Append this block to the end of lifecast_apps/source/BUILD
+# (or run add_k2stitch_to_BUILD.sh from the repo root to do it automatically).
+# ------------------------------------------------------------------------------
+
+p11_cc_library(
+  name = "k2stitch_lib",
+  srcs = ["k2stitch_core.cc"],
+  hdrs = [
+    "k2stitch_core.h",
+    "k2stitch_calibration.h",
+  ],
+  deps = [
+    ":logger",
+    ":opencv_xplatform",
+    "//external:eigen",
+    ":fisheye_camera",
+    ":util_math",
+    ":util_file",
+    ":util_string",
+    ":util_command",
+    "//third_party:json",
+  ],
+)
+
+p11_cc_library(
+  name = "k2stitch_app_lib",
+  srcs = ["k2stitch.cc"],
+  deps = [
+    ":k2stitch_lib",
+    ":gflags_xplatform",
+    ":dear_imgui_app",
+    ":imgui_cvmat",
+    ":imgui_filedialog",
+    ":preferences",
+    ":util_opengl",
+    "//third_party/dear_imgui:dear_imgui",
+    "//third_party:tinyfiledialogs",
+  ] + select({
+    "@platforms//os:macos": ["@homebrew_gcc_libs//:gcc_runtime", "@homebrew_openblas_libs//:openblas"],
+    "//conditions:default": [],
+  }),
+)
+
+p11_cc_binary(
+  name = "k2stitch",
+  deps = [":k2stitch_app_lib"],
+)
