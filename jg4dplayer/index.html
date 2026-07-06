@@ -15,64 +15,159 @@
   Anaglyph compositing uses Eric Dubois' least-squares matrices.
 -->
 <style>
-  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+  /* mavra.neocities.org-adjacent: monospace, black & white, win98 bevel chrome */
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden;
+               font-family:"Courier New", Courier, monospace; }
   #app { position:fixed; inset:0; }
   canvas { display:block; }
+
+  /* ---- floating controls dialog ---- */
   #hud {
-    position:fixed; top:0; left:0; right:0; padding:10px 14px;
-    display:flex; align-items:center; gap:14px;
-    font-family:ui-monospace, Menlo, Consolas, monospace; font-size:13px; color:#eee;
-    background:linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0));
-    transition:opacity .4s; z-index:10; user-select:none; -webkit-user-select:none;
+    position:fixed; top:18px; left:18px; width:272px;
+    background:#c0c0c0; color:#000; font-size:12px;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+    padding:3px; z-index:10; transition:opacity .4s;
+    user-select:none; -webkit-user-select:none;
   }
   #hud.hidden { opacity:0; pointer-events:none; }
-  #hud img { width:28px; height:28px; image-rendering:pixelated; }
-  #hud .title { font-weight:bold; letter-spacing:.5px; }
-  #hud button, #hud label {
-    background:rgba(255,255,255,.12); color:#eee; border:1px solid rgba(255,255,255,.25);
-    border-radius:6px; padding:4px 10px; font:inherit; cursor:pointer; display:flex; align-items:center; gap:6px;
+  #titlebar {
+    display:flex; align-items:center; gap:5px; height:20px; padding:1px 3px;
+    background:linear-gradient(90deg,#000080,#1084d0); color:#fff; font-weight:bold;
   }
-  #hud button:hover { background:rgba(255,255,255,.25); }
-  #hud input[type=range] { width:90px; }
-  #hud .spacer { flex:1; }
+  #titlebar img { width:16px; height:16px; image-rendering:pixelated; }
+  #ver { font-weight:normal; opacity:.75; }
+  .tspacer { flex:1; }
+  .tbtn {
+    width:18px; height:16px; padding:0; line-height:13px; text-align:center;
+    font-family:inherit; font-weight:bold; font-size:11px; color:#000;
+    background:#c0c0c0; border:none; cursor:pointer;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  }
+  .tbtn:active { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
+  #panelbody { padding:9px 7px 6px; display:flex; flex-direction:column; gap:9px; }
+  .row { display:flex; align-items:center; gap:7px; }
+  .btn {
+    font-family:inherit; font-size:12px; color:#000; padding:3px 12px; min-width:70px;
+    background:#c0c0c0; border:none; cursor:pointer;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  }
+  .btn:active { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
+  .slab { width:56px; }
+  .sval { width:44px; text-align:right; }
+  input[type=range] { -webkit-appearance:none; appearance:none; flex:1; height:20px;
+                      background:transparent; margin:0; cursor:pointer; }
+  input[type=range]::-webkit-slider-runnable-track {
+    height:2px; background:#808080; border-bottom:1px solid #fff; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:12px; height:19px; margin-top:-9px; background:#c0c0c0;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+  input[type=range]::-moz-range-track { height:2px; background:#808080; border-bottom:1px solid #fff; }
+  input[type=range]::-moz-range-thumb {
+    width:12px; height:19px; border:none; border-radius:0; background:#c0c0c0;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+  .checks { flex-wrap:wrap; gap:5px 12px; }
+  .checks label { display:flex; align-items:center; gap:5px; cursor:pointer; }
+  input[type=checkbox] {
+    -webkit-appearance:none; appearance:none; width:13px; height:13px; margin:0; background:#fff;
+    box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a,
+                inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+    position:relative; cursor:pointer; flex:none;
+  }
+  input[type=checkbox]:checked::before {
+    content:"\2713"; position:absolute; top:-2px; left:1px;
+    font-size:12px; font-weight:bold; color:#000;
+  }
+  #statusbar {
+    padding:2px 5px; font-size:11px;
+    box-shadow: inset 1px 1px #808080, inset -1px -1px #fff;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+
+  /* ---- intro: ascii readme sheet ---- */
   #hint {
     position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
-    color:#bbb; font-family:ui-monospace, Menlo, Consolas, monospace; font-size:14px;
-    text-align:center; line-height:1.9; z-index:5; pointer-events:none; text-shadow:0 1px 3px #000;
+    background:#fff; color:#000; border:1px solid #000;
+    padding:16px 24px 14px; z-index:5; pointer-events:none; text-align:center;
   }
-  #hint img { width:96px; height:96px; image-rendering:pixelated; display:block; margin:0 auto 10px; }
-  #err { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); color:#ff7a7a;
-         font-family:ui-monospace, monospace; font-size:13px; z-index:20; text-shadow:0 1px 3px #000; }
+  #hint img { width:80px; height:80px; image-rendering:pixelated; margin-bottom:4px; }
+  #hint pre { margin:0; font-family:inherit; font-size:13px; line-height:1.3; text-align:left; }
+  #hint .tex { color:#999; }
+
+  #err { position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
+         background:#fff; color:#c00; border:1px solid #000; padding:2px 10px;
+         font-size:13px; z-index:20; empty-cells:hide; }
+  #err:empty { display:none; }
   #drop.active::after {
-    content:"drop LDI3 file"; position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-    background:rgba(0,120,255,.15); border:3px dashed rgba(0,160,255,.7);
-    color:#fff; font:bold 24px ui-monospace, monospace; z-index:30;
+    content:"[ drop LDI3 file ]"; position:fixed; inset:14px;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(255,255,255,.85); border:2px dashed #000;
+    color:#000; font:bold 22px "Courier New", Courier, monospace; z-index:30;
   }
 </style>
 </head>
 <body id="drop">
 <div id="app"></div>
+
 <div id="hud">
-  <img src="jgcat_64.png" alt="">
-  <span class="title">jg 4d player</span><span id="ver" style="opacity:.55">v4</span>
-  <button id="open_btn" title="Open a *_ldi3.mp4 or *_ldi3.jpg file">open</button>
-  <input type="file" id="file_input" accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
-  <button id="play_btn" title="Space">play</button>
-  <label title="Interaxial separation (mm) — overall 3D strength">ipd <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span id="ipd_val">63</span></label>
-  <label title="Stereo window: content at this distance appears exactly on the screen; nearer content pops out toward the audience ([ and ] keys)">scrn <input type="range" id="conv" min="0" max="100" step="1" value="50"><span id="conv_val">3.9m</span></label>
-  <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
-  <label title="Expand TV-range (limited) video levels — auto-detected; toggle if depth looks flat or colors washed out"><input type="checkbox" id="tvfix"> tv-fix</label>
-  <label title="Render eyes at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
-  <label title="Swap left/right eyes"><input type="checkbox" id="swap"> swap</label>
-  <span class="spacer"></span>
-  <button id="fs_btn" title="F">fullscreen</button>
+  <div id="titlebar">
+    <img src="jgcat_64.png" alt="">
+    <span>jg 4d player<span id="ver"> v5</span></span>
+    <span class="tspacer"></span>
+    <button class="tbtn" id="min_btn" title="collapse">_</button>
+    <button class="tbtn" id="fs_btn" title="fullscreen (F)">&#9633;</button>
+    <button class="tbtn" id="close_btn" title="hide controls (H to show)">&times;</button>
+  </div>
+  <div id="panelbody">
+    <div class="row">
+      <button class="btn" id="open_btn" title="Open a *_ldi3.mp4 or *_ldi3.jpg file">open...</button>
+      <button class="btn" id="play_btn" title="space">play</button>
+      <input type="file" id="file_input" accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
+    </div>
+    <div class="row" title="Interaxial separation (mm) — overall 3D strength">
+      <label class="slab" for="ipd">ipd</label>
+      <input type="range" id="ipd" min="0" max="120" step="1" value="63"><span class="sval" id="ipd_val">63</span>
+    </div>
+    <div class="row" title="Stereo window: content at this distance appears exactly on the theater screen; nearer content pops out ([ and ] keys)">
+      <label class="slab" for="conv">screen</label>
+      <input type="range" id="conv" min="0" max="100" step="1" value="50"><span class="sval" id="conv_val">3.9m</span>
+    </div>
+    <div class="row checks">
+      <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
+      <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
+      <label title="Render eyes at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
+      <label title="Swap left/right eyes"><input type="checkbox" id="swap"> swap</label>
+    </div>
+    <div id="statusbar">no media — drop an *_ldi3 file</div>
+  </div>
 </div>
+
 <div id="hint">
   <img src="jgcat.png" alt="">
-  drag &amp; drop an LDI3 file (*_ldi3.mp4 / *_ldi3.jpg), or use <b>open</b><br>
-  drag = look &nbsp;·&nbsp; W A S D + Q E / scroll = move &nbsp;·&nbsp; space = play/pause<br>
-  F = fullscreen &nbsp;·&nbsp; R = reset view &nbsp;·&nbsp; M = mute &nbsp;·&nbsp; [ ] = stereo window &nbsp;·&nbsp; 1/2/3 = layers &nbsp;·&nbsp; G = raw grid<br>
-  <span style="color:#777">wear red-cyan glasses (red over left eye)</span>
+  <pre><span class="tex">  .       .   ~      .        .    ~     .       .   </span>
++======================================================+
+|               j g   4 d   p l a y e r                |
+|           anaglyph LDI3 volumetric viewer            |
++======================================================+
+|                                                      |
+|   drop an *_ldi3.mp4 / *_ldi3.jpg anywhere on        |
+|   this page, or use [ open... ] in the controls      |
+|                                                      |
++------------------------------------------------------+
+|   drag ......... look       space ..... play/pause   |
+|   w a s d q e .. move       f ......... fullscreen   |
+|   scroll ....... dolly      r ......... reset view   |
+|   [ / ] ........ 3d window  m ......... mute         |
+|   1 2 3 ........ layers     g ......... raw grid     |
+|   h ............ controls                            |
++------------------------------------------------------+
+|      wear red-cyan glasses (red over LEFT eye)       |
++======================================================+
+<span class="tex">      .    ~       .       .      ~   .          .    </span></pre>
 </div>
 <div id="err"></div>
 
@@ -306,7 +401,8 @@ let layerVisible = [true, true, true];
 let rangeFixOn = false, rangeProbed = false;
 let probeRT = null, probeMat = null, probeScene = null;
 let debugGrid = false, debugScene = null, debugMat = null;
-console.log("jg4d player build v3 (single-pass compositing + tv-range autodetect)");
+console.log("jg4d player build v5 (mavra restyle: win98 chrome, ascii intro)");
+let panelClosed = false;
 
 // Camera rig: position + yaw/pitch; two eye cameras offset on local x.
 const rig = new THREE.Group();
@@ -532,6 +628,7 @@ function loadMedia(url, name) {
   setError("");
   disposeMedia();
   hint.style.display = "none";
+  setStatus((name || url.split('/').pop() || "media").slice(0, 60));
   const ext = (name || url).split('?')[0].split('.').pop().toLowerCase();
 
   if (ext === "jpg" || ext === "jpeg" || ext === "png") {
@@ -621,6 +718,11 @@ window.addEventListener('keydown', e => {
   else if (k === "g") { debugGrid = !debugGrid; dirty = true; }
   else if (k === "[") { setFocus(focusM / 1.15); }
   else if (k === "]") { setFocus(focusM * 1.15); }
+  else if (k === "h") {
+    panelClosed = !panelClosed;
+    hud.classList.toggle('hidden', panelClosed);
+    if (!panelClosed) showHud();
+  }
   else if (k === "1" || k === "2" || k === "3") {
     const l = parseInt(k) - 1; layerVisible[l] = !layerVisible[l]; dirty = true;
   }
@@ -635,7 +737,7 @@ function toggleFullscreen() {
 // HUD auto-hide
 let hudTimer;
 function showHud() {
-  hud.classList.remove('hidden');
+  if (!panelClosed) hud.classList.remove('hidden');
   app.style.cursor = '';
   clearTimeout(hudTimer);
   hudTimer = setTimeout(() => {
@@ -644,6 +746,32 @@ function showHud() {
   }, 3000);
 }
 showHud();
+
+// ---- dialog window behavior: drag, collapse, close ----
+const titlebar = document.getElementById('titlebar');
+let panelDrag = null;
+titlebar.addEventListener('mousedown', e => {
+  if (e.target.closest('.tbtn')) return;
+  const r = hud.getBoundingClientRect();
+  panelDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+  e.preventDefault();
+});
+window.addEventListener('mousemove', e => {
+  if (!panelDrag) return;
+  const r = hud.getBoundingClientRect();
+  hud.style.left = Math.max(0, Math.min(window.innerWidth - r.width, e.clientX - panelDrag.dx)) + 'px';
+  hud.style.top  = Math.max(0, Math.min(window.innerHeight - 24, e.clientY - panelDrag.dy)) + 'px';
+});
+window.addEventListener('mouseup', () => { panelDrag = null; });
+document.getElementById('min_btn').onclick = () => {
+  const b = document.getElementById('panelbody');
+  b.style.display = b.style.display === 'none' ? '' : 'none';
+};
+document.getElementById('close_btn').onclick = () => {
+  panelClosed = true;
+  hud.classList.add('hidden');
+};
+function setStatus(msg) { document.getElementById('statusbar').textContent = msg; }
 
 // HUD controls
 document.getElementById('open_btn').onclick = () => document.getElementById('file_input').click();
