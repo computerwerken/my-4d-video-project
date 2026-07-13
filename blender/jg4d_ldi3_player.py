@@ -393,6 +393,57 @@ def jg4d_frame_handler(scene, _depsgraph=None):
 
 
 # ----------------------------------------------------------------------------
+# Dubois red-cyan anaglyph conversion (identical matrices + gamma handling to
+# the jg4dplayer web app's composite shader, so previews match the player).
+# Use for PREVIEWS while animating; for delivery keep L/R masters separate and
+# apply Dubois after the grade.
+# ----------------------------------------------------------------------------
+
+DUBOIS_L = np.array([[ 0.4561000,  0.5004840,  0.1763810],
+                     [-0.0400822, -0.0378246, -0.0157589],
+                     [-0.0152161, -0.0205971, -0.0054686]], np.float32)
+DUBOIS_R = np.array([[-0.0434706, -0.0879388, -0.0015553],
+                     [ 0.3784760,  0.7336400, -0.0180517],
+                     [-0.0721527, -0.1129610,  1.2264000]], np.float32)
+
+
+def dubois_pair(left_srgb, right_srgb):
+    """(H,W,3) float sRGB-encoded in [0,1] -> Dubois red-cyan, same encoding."""
+    l = np.power(np.clip(left_srgb, 0, 1), 2.2)
+    r = np.power(np.clip(right_srgb, 0, 1), 2.2)
+    out = l @ DUBOIS_L.T + r @ DUBOIS_R.T
+    return np.power(np.clip(out, 0, 1), 1.0 / 2.2)
+
+
+def _read_rgb(path):
+    img = bpy.data.images.load(path, check_existing=False)
+    try:
+        set_noncolor(img)  # already display-encoded pixels; read them raw
+        w, h = img.size
+        buf = np.empty(w * h * img.channels, np.float32)
+        img.pixels.foreach_get(buf)
+        return buf.reshape(h, w, img.channels)[:, :, :3][::-1].copy()  # top-down
+    finally:
+        bpy.data.images.remove(img)
+
+
+def _write_rgb(path, rgb_topdown):
+    h, w = rgb_topdown.shape[:2]
+    img = bpy.data.images.new("__jg4d_out", w, h, alpha=False)
+    rgba = np.ones((h, w, 4), np.float32)
+    rgba[:, :, :3] = rgb_topdown[::-1]
+    img.pixels.foreach_set(rgba.ravel())
+    img.filepath_raw = path
+    img.file_format = "PNG"
+    img.save()
+    bpy.data.images.remove(img)
+
+
+def dubois_convert_files(left_path, right_path, out_path):
+    _write_rgb(out_path, dubois_pair(_read_rgb(left_path), _read_rgb(right_path)))
+
+
+# ----------------------------------------------------------------------------
 # Operators + panel
 # ----------------------------------------------------------------------------
 
@@ -459,6 +510,39 @@ class JG4D_OT_stereo(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class JG4D_OT_dubois(bpy.types.Operator):
+    """Convert an L/R pair (Blender's *_L/*_R suffixed renders) to a Dubois
+    red-cyan anaglyph PNG next to them. Select the LEFT file."""
+    bl_idname = "jg4d.dubois"
+    bl_label = "Dubois anaglyph from L/R pair"
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.png;*.jpg;*.jpeg;*.exr;*.tif;*.tiff", options={"HIDDEN"})
+
+    def execute(self, context):
+        lp = self.filepath
+        for l_tag, r_tag in (("_L", "_R"), ("left", "right"), ("_l", "_r")):
+            if l_tag in os.path.basename(lp):
+                rp = os.path.join(os.path.dirname(lp),
+                                  os.path.basename(lp).replace(l_tag, r_tag))
+                if os.path.isfile(rp):
+                    break
+        else:
+            self.report({"ERROR"}, "Could not find matching right-eye file")
+            return {"CANCELLED"}
+        out = os.path.splitext(lp)[0].replace(l_tag, "") + "_anaglyph.png"
+        try:
+            dubois_convert_files(lp, rp, out)
+        except Exception as e:
+            self.report({"ERROR"}, "Dubois conversion failed: %s" % e)
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Wrote %s" % out)
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+
 class JG4D_PT_panel(bpy.types.Panel):
     bl_label = "jg4d LDI3 player"
     bl_space_type = "VIEW_3D"
@@ -470,6 +554,7 @@ class JG4D_PT_panel(bpy.types.Panel):
         col.operator("jg4d.import_ldi3", icon="IMPORT")
         col.operator("jg4d.refresh", icon="FILE_REFRESH")
         col.operator("jg4d.setup_stereo", icon="CAMERA_STEREO")
+        col.operator("jg4d.dubois", icon="IMAGE_RGB")
         col.separator()
         col.label(text="Params live in the sidecar JSON or")
         col.label(text="the 'jg4d' prop on the import root.")
@@ -477,7 +562,7 @@ class JG4D_PT_panel(bpy.types.Panel):
         col.label(text="ffmpeg -i in.mp4 out_%06d.png")
 
 
-CLASSES = (JG4D_OT_import, JG4D_OT_refresh, JG4D_OT_stereo, JG4D_PT_panel)
+CLASSES = (JG4D_OT_import, JG4D_OT_refresh, JG4D_OT_stereo, JG4D_OT_dubois, JG4D_PT_panel)
 
 
 def register():
