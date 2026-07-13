@@ -50,7 +50,11 @@ DEFAULTS = {
     "max_depth": 50.0,         # meters; also the clamp in the reference player
     "min_depth": 0.01,
     "decode_12bit": True,
-    "grid_n": 256,             # vertices per mesh side (before circular clip)
+    # 512 = geometric parity with the reference players (web/Unity/Unreal use
+    # 512 quads per side). Color/alpha detail is independent of this: materials
+    # sample the full-resolution texture per rendered pixel. Raise for even
+    # finer depth silhouettes, lower for lighter scenes.
+    "grid_n": 512,
 }
 
 # Caches. _red_cache: raw red-channel per file (one 5760^2 image feeds all
