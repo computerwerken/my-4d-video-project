@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>jg4d vitrine</title>
+<style>
+  :root{
+    --bg:#111214; --panel:#191b1f; --panel2:#212429; --line:#2c3037;
+    --ink:#e8e6e3; --dim:#8b8f96; --acc:#c8956d; --ok:#5fa86b; --warn:#c9a227; --bad:#c1554a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:14px;margin:0;letter-spacing:.14em;text-transform:uppercase}
+  header .sub{color:var(--dim);font-size:11px}
+  .wrap{display:grid;grid-template-columns:330px 1fr;gap:0;height:calc(100vh - 46px)}
+  .side{border-right:1px solid var(--line);overflow-y:auto;background:var(--panel)}
+  .main{overflow-y:auto;padding:18px}
+  section{border-bottom:1px solid var(--line);padding:14px}
+  h2{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+     margin:0 0 10px}
+  label{display:block;color:var(--dim);font-size:11px;margin:8px 0 3px}
+  input,select{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);
+        border-radius:4px;padding:6px 8px;font:12px ui-monospace,Menlo,monospace}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  .row{display:flex;gap:6px}
+  .row>*{flex:1;min-width:0}
+  button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+         border-radius:4px;padding:7px 11px;cursor:pointer;font:12px ui-monospace,Menlo,monospace}
+  button:hover:not(:disabled){border-color:var(--acc)}
+  button:disabled{opacity:.4;cursor:default}
+  button.go{background:var(--acc);color:#17181a;border-color:var(--acc);font-weight:700}
+  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;
+        border:1px solid;margin:2px 3px 2px 0;white-space:nowrap}
+  .ok{color:var(--ok);border-color:#2c4a33} .warn{color:var(--warn);border-color:#4d431a}
+  .bad{color:var(--bad);border-color:#4d2a26}
+  table{width:100%;border-collapse:collapse}
+  th{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);
+     text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  td{padding:8px;border-bottom:1px solid #202329;vertical-align:top}
+  tr.sel{background:#1d2026}
+  tr:hover{background:#181b20;cursor:pointer}
+  .muted{color:var(--dim)}
+  #log{background:#0c0d0f;border:1px solid var(--line);border-radius:4px;padding:8px;
+       height:190px;overflow-y:auto;white-space:pre-wrap;font-size:11px;color:#a7abb2}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+  .card{border:2px solid var(--line);border-radius:6px;overflow:hidden;cursor:pointer;
+        background:var(--panel)}
+  .card.sel{border-color:var(--acc)}
+  .card img{width:100%;display:block;background:#000}
+  .card .cap{padding:5px 7px;font-size:11px;display:flex;justify-content:space-between}
+  .bar{height:3px;background:var(--panel2);border-radius:2px;overflow:hidden;margin-top:6px}
+  .bar>div{height:100%;background:var(--acc);transition:width .3s}
+  .tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+  .tabs button{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;
+               color:var(--dim);padding:7px 13px}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--acc)}
+  .browse{position:fixed;inset:0;background:#000b;display:none;align-items:center;
+          justify-content:center;z-index:9}
+  .browse.on{display:flex}
+  .browse .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+               width:640px;max-height:74vh;display:flex;flex-direction:column}
+  .browse .list{overflow-y:auto;flex:1}
+  .browse .it{padding:6px 12px;cursor:pointer;display:flex;gap:8px}
+  .browse .it:hover{background:var(--panel2)}
+  .zoom{position:fixed;inset:0;background:#000d;display:none;align-items:center;
+        justify-content:center;z-index:10;flex-direction:column;gap:8px}
+  .zoom.on{display:flex}
+  .zoom img{max-width:92vw;max-height:78vh;border:1px solid var(--line)}
+  .hint{color:var(--dim);font-size:11px;margin:4px 0 0}
+  .empty{color:var(--dim);text-align:center;padding:50px 20px;line-height:1.9}
+  code{background:var(--panel2);padding:1px 5px;border-radius:3px;color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>jg4d vitrine</h1>
+  <span class="sub" id="hdr">starting…</span>
+</header>
+
+<div class="wrap">
+  <div class="side">
+    <section>
+      <h2>Setup</h2>
+      <div id="setup"></div>
+    </section>
+
+    <section>
+      <h2>Project folder</h2>
+      <div class="row">
+        <input id="outdir" placeholder="~/vitrine_items">
+        <button onclick="setOut()" style="flex:0 0 58px">Set</button>
+      </div>
+      <p class="hint">Everything is written here. Re-open the app and it reloads.</p>
+    </section>
+
+    <section>
+      <h2>1 · Prep</h2>
+      <label>Source (PDF, image, folder, or https:// URL)</label>
+      <div class="row">
+        <input id="src" placeholder="/path/to/scan.pdf or https://.../poster.jpg">
+        <button onclick="openBrowse()" style="flex:0 0 66px">Browse</button>
+      </div>
+      <div class="row">
+        <div><label>PDF pages</label><input id="pages" placeholder="20 or 3,7,20-24"></div>
+        <div><label>Scan dpi</label><input id="dpi" placeholder="300"></div>
+      </div>
+      <div class="row">
+        <div><label>Real width mm</label><input id="wmm" placeholder="auto"></div>
+        <div><label>Size preset</label>
+          <select id="preset"><option value="">auto</option>
+          <option value="poster">poster 24×36"</option>
+          <option value="onesheet">one-sheet 27×41"</option>
+          <option value="a2">A2</option><option value="a3">A3</option>
+          <option value="a4">A4</option><option value="letter">letter</option>
+          <option value="tabloid">tabloid</option>
+          <option value="postcard">postcard</option>
+          <option value="photo">photo 4×6"</option>
+          <option value="ticket">ticket</option><option value="card">card</option>
+          </select></div>
+        <div><label>Matte</label>
+          <select id="matte"><option>auto</option><option>full</option>
+          <option>page</option><option>white</option><option>dark</option></select></div>
+      </div>
+      <p class="hint">Physical size drives the stereo solve, dust scale and DOF.
+        Web images carry no real size — give a <b>width</b> or pick a <b>preset</b>,
+        or the item is assumed 300 ppi and flagged. Transparent PNG/WebP clipouts
+        use their own alpha as the matte.</p>
+      <button class="go" style="width:100%;margin-top:9px" onclick="prep()">Prep</button>
+    </section>
+
+    <section>
+      <h2>2 · Look</h2>
+      <div class="row">
+        <div><label>Res X</label><input id="res_x" value="4096"></div>
+        <div><label>Res Y</label><input id="res_y" value="2160"></div>
+      </div>
+      <p class="hint">Set resolution before rendering — the halftone ruling is
+        computed from it.</p>
+      <div class="row">
+        <div><label>Lens mm</label><input id="lens_mm"></div>
+        <div><label>Cam dist mm</label><input id="cam_distance_mm"></div>
+      </div>
+      <div class="row">
+        <div><label>Case W</label><input id="case_width_mm"></div>
+        <div><label>Case H</label><input id="case_height_mm"></div>
+        <div><label>Case D</label><input id="case_depth_mm"></div>
+      </div>
+      <div class="row">
+        <div><label>Max parallax %</label><input id="target_parallax"></div>
+        <div><label>Curl mm</label><input id="curl_mm"></div>
+      </div>
+      <div class="row">
+        <div><label>Item depth mm</label><input id="item_depth_mm"></div>
+        <div><label>Item tilt °</label><input id="item_tilt"></div>
+      </div>
+      <div class="row">
+        <div><label>Haze</label><input id="volume_density"></div>
+        <div><label>Motes</label><input id="dust_count"></div>
+      </div>
+      <div class="row">
+        <div><label>Key W</label><input id="key_energy"></div>
+        <div><label>Fill W</label><input id="fill_energy"></div>
+        <div><label>Sheen W</label><input id="sheen_energy"></div>
+      </div>
+      <div class="row">
+        <div><label>Light variation</label><input id="var_light"></div>
+        <div><label>Scuff amount</label><input id="scuff_amount"></div>
+      </div>
+      <p class="hint">1.0% parallax for anaglyph. Interaxial is solved per item —
+        never assumed.</p>
+      <button style="width:100%;margin-top:9px" onclick="saveLook()">Save look</button>
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <div class="main">
+    <div class="tabs">
+      <button class="on" onclick="tab('items')" id="t_items">Items</button>
+      <button onclick="tab('contact')" id="t_contact">Contact sheet</button>
+      <button onclick="tab('render')" id="t_render">Render</button>
+    </div>
+    <div id="v_items"></div>
+    <div id="v_contact" style="display:none"></div>
+    <div id="v_render" style="display:none"></div>
+  </div>
+</div>
+
+<div class="browse" id="browse" onclick="if(event.target.id=='browse')closeBrowse()">
+  <div class="box">
+    <div style="padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px">
+      <input id="bpath" onkeydown="if(event.key=='Enter')browseTo(this.value)">
+      <button onclick="browseUp()">Up</button>
+      <button onclick="closeBrowse()">Close</button>
+    </div>
+    <div class="list" id="blist"></div>
+    <div style="padding:9px 12px;border-top:1px solid var(--line);display:flex;
+                justify-content:space-between;align-items:center">
+      <span class="muted" style="font-size:11px">Click a file, or pick the folder you're in</span>
+      <button class="go" onclick="pickHere()">Use this folder</button>
+    </div>
+  </div>
+</div>
+
+<div class="zoom" id="zoom" onclick="document.getElementById('zoom').classList.remove('on')">
+  <img id="zimg"><div class="muted" id="zcap"></div>
+</div>
+
+<script>
+let S={items:[],setup:{},job:{},look:{}}, LOGN=0, TAB='items', SEL=null;
+const LOOK=['lens_mm','cam_distance_mm','case_width_mm','case_height_mm','case_depth_mm',
+  'target_parallax','curl_mm','item_depth_mm','item_tilt','volume_density','dust_count',
+  'key_energy','fill_energy','sheen_energy','var_light','scuff_amount'];
+
+const $=id=>document.getElementById(id);
+async function get(u){const r=await fetch(u);return r.json()}
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(b||{})});const j=await r.json();if(j.error)alert(j.error);return j}
+
+function tab(t){TAB=t;['items','contact','render'].forEach(x=>{
+  $('v_'+x).style.display=x==t?'':'none';$('t_'+x).className=x==t?'on':''});draw()}
+
+async function poll(){
+  try{
+    S=await get('/api/state');
+    if(!document.activeElement||document.activeElement.tagName!='INPUT'){
+      $('outdir').value=S.out_dir; $('res_x').value=S.res_x; $('res_y').value=S.res_y;
+      LOOK.forEach(k=>{if(S.look[k]!==undefined)$(k).value=S.look[k]});
+    }
+    drawSetup(); draw();
+    const j=S.job;
+    $('hdr').textContent = j.active
+      ? `${j.kind}  ${j.done}/${j.total}  ${j.msg||''}`
+      : `${S.items.length} item(s) · ${S.out_dir}`;
+    const l=await get('/api/log?since='+LOGN);
+    if(l.lines.length){LOGN=l.n;const e=$('log');
+      e.textContent+=(e.textContent?'\n':'')+l.lines.join('\n');e.scrollTop=e.scrollHeight}
+  }catch(e){$('hdr').textContent='app not responding — is the terminal still open?'}
+}
+setInterval(poll,1200); poll();
+
+function drawSetup(){
+  const order=['blender','vitrine_kit','vitrine_prep','numpy','pillow','opencv','scipy','poppler'];
+  $('setup').innerHTML=order.filter(k=>S.setup[k]).map(k=>{
+    const v=S.setup[k], cls=v.ok?'ok':(v.warn?'warn':'bad');
+    return `<div style="margin:3px 0"><span class="pill ${cls}">${v.ok?'✓':(v.warn?'!':'✗')} ${k}</span>
+      <span class="muted" style="font-size:10px">${(v.detail||'').slice(0,48)}</span>
+      ${v.fix&&!v.ok?`<div class="hint" style="margin-left:4px">→ <code>${v.fix}</code></div>`:''}</div>`
+  }).join('');
+}
+
+function qcPills(q){return (q||[]).map(([l,t])=>`<span class="pill ${l}">${t}</span>`).join('')}
+
+function draw(){
+  if(TAB=='items')drawItems(); if(TAB=='contact')drawContact(); if(TAB=='render')drawRender();
+}
+
+function drawItems(){
+  if(!S.items.length){$('v_items').innerHTML=
+    `<div class="empty">No items yet.<br>Point <b>Source</b> at a PDF, an image, or a folder — then <b>Prep</b>.
+     <br><br><span style="font-size:11px">Read the QC pills before rendering. They're the check, not decoration.</span></div>`;return}
+  $('v_items').innerHTML=`<table><tr><th>Item</th><th>Size</th><th>QC</th><th>Variant</th><th></th></tr>
+    ${S.items.map(it=>{
+      const m=it.meta_small||{}, p=m.physical_mm, px=m.pixels;
+      return `<tr class="${SEL==it.stem?'sel':''}" onclick="SEL='${it.stem}';draw()">
+        <td><b>${it.stem}</b><div class="muted" style="font-size:10px">${px?px[0]+'×'+px[1]:''}</div></td>
+        <td class="muted">${p?p[0].toFixed(0)+'×'+p[1].toFixed(0)+' mm':'—'}</td>
+        <td>${qcPills(it.qc)}</td>
+        <td>${it.seed?`<span class="pill ok">seed ${it.seed}</span>`:'<span class="muted">—</span>'}</td>
+        <td style="text-align:right"><button onclick="event.stopPropagation();zoomItem('${it.stem}')">View</button></td>
+      </tr>`}).join('')}</table>
+    <p class="hint" style="margin-top:12px">
+      <b>View</b> shows a 100% crop — that's the only honest way to judge the descreen.
+      A downscaled preview hides exactly the aliasing you're checking for.</p>`;
+}
+
+function zoomItem(stem){
+  const p=`${S.out_dir}/.previews/${stem}_crop.jpg`;
+  $('zimg').src='/file?p='+encodeURIComponent(p)+'&t='+Date.now();
+  $('zcap').textContent=stem+' — 100% crop. Lattice gone? Text still crisp?';
+  $('zoom').classList.add('on');
+}
+
+function drawContact(){
+  const withC=S.items.filter(i=>i.contact&&i.contact.length);
+  $('v_contact').innerHTML=`
+    <div style="display:flex;gap:8px;align-items:end;margin-bottom:14px;flex-wrap:wrap">
+      <div><label>Variants</label><input id="nvar" value="4" style="width:70px"></div>
+      <div><label>Samples</label><input id="csamp" value="48" style="width:80px"></div>
+      <div><label>Size %</label><input id="cpct" value="25" style="width:70px"></div>
+      <button class="go" onclick="contact()" ${S.job.active?'disabled':''}>
+        Render contact sheet${SEL?' for '+SEL:' — all items'}</button>
+      ${S.job.active?'<button onclick="post(\'/api/cancel\')">Cancel</button>':''}
+    </div>
+    ${S.job.active&&S.job.kind=='contact'?`<div class="bar"><div style="width:${100*S.job.done/Math.max(S.job.total,1)}%"></div></div>`:''}
+    ${!withC.length?`<div class="empty">No contact sheets yet.<br>
+       Pick an item on the Items tab (or leave none selected for all), then render.
+       <br><br><span style="font-size:11px">Low samples, quarter size, anaglyph — so you judge the 3D, not a flat left eye.
+       <br>Put on red-cyan glasses for this bit.</span></div>`:''}
+    ${withC.map(it=>`<h2 style="margin-top:18px">${it.stem}</h2>
+      <div class="grid">${it.contact.map(c=>`
+        <div class="card ${it.seed==c.seed?'sel':''}" onclick="pick('${it.stem}',${c.seed})">
+          <img src="/file?p=${encodeURIComponent(c.path)}" loading="lazy">
+          <div class="cap"><span>seed ${c.seed}</span>
+            ${it.seed==c.seed?'<span class="ok">✓ chosen</span>':'<span class="muted">pick</span>'}</div>
+        </div>`).join('')}</div>`).join('')}`;
+}
+
+async function pick(stem,seed){await post('/api/select',{stem,seed});poll()}
+
+function drawRender(){
+  const ready=S.items.filter(i=>i.seed), done=S.items.filter(i=>i.final&&i.final.length);
+  $('v_render').innerHTML=`
+    <div style="display:flex;gap:8px;align-items:end;margin-bottom:6px;flex-wrap:wrap">
+      <div><label>Samples</label><input id="fsamp" value="512" style="width:90px"></div>
+      <button class="go" onclick="render()" ${S.job.active||!ready.length?'disabled':''}>
+        Render ${ready.length} master${ready.length==1?'':'s'} (L/R)</button>
+      ${S.job.active?'<button onclick="post(\'/api/cancel\')">Cancel</button>':''}
+    </div>
+    ${S.job.active&&S.job.kind=='final'?`<div class="bar"><div style="width:${100*S.job.done/Math.max(S.job.total,1)}%"></div></div>`:''}
+    <p class="hint">Writes 16-bit Individual L/R into <code>${S.out_dir}/renders</code>.
+      Not anaglyph, on purpose — grade in Resolve, Dubois last.</p>
+    ${!ready.length?`<div class="empty">Nothing to render.<br>
+      Choose a variant on the Contact sheet tab first.</div>`:
+      `<table style="margin-top:14px"><tr><th>Item</th><th>Seed</th><th>Status</th></tr>
+      ${S.items.map(i=>`<tr><td>${i.stem}</td>
+        <td>${i.seed?`<span class="pill ok">${i.seed}</span>`:'<span class="muted">not picked</span>'}</td>
+        <td>${i.final&&i.final.length?'<span class="pill ok">rendered</span>':
+             (i.seed?'<span class="muted">queued</span>':'<span class="muted">—</span>')}</td></tr>`).join('')}
+      </table>`}
+    ${done.length?`<p class="hint" style="margin-top:14px">${done.length} rendered.
+      Next: import the L/R pairs into Resolve, grade, then Dubois at the very end.</p>`:''}`;
+}
+
+async function setOut(){await post('/api/outdir',{path:$('outdir').value});LOGN=0;$('log').textContent='';poll()}
+async function saveLook(){
+  const look={}; LOOK.forEach(k=>{const v=parseFloat($(k).value); if(!isNaN(v))look[k]=v});
+  await post('/api/look',{look,res_x:parseInt($('res_x').value)||4096,res_y:parseInt($('res_y').value)||2160});
+  poll();
+}
+async function prep(){
+  await saveLook();
+  await post('/api/prep',{source:$('src').value,pages:$('pages').value,
+    dpi:parseFloat($('dpi').value)||null,width_mm:parseFloat($('wmm').value)||null,
+    preset:$('preset').value||null,
+    matte:$('matte').value,target_height:parseInt($('res_y').value)||2160});
+  poll();
+}
+async function contact(){
+  await saveLook();
+  await post('/api/contact',{stems:SEL?[SEL]:null,variants:parseInt($('nvar').value)||4,
+    samples:parseInt($('csamp').value)||48,res_pct:parseInt($('cpct').value)||25});
+  poll();
+}
+async function render(){
+  await saveLook();
+  await post('/api/render',{samples:parseInt($('fsamp').value)||512});
+  poll();
+}
+
+let BP='';
+async function openBrowse(){$('browse').classList.add('on');browseTo($('src').value||'~')}
+function closeBrowse(){$('browse').classList.remove('on')}
+async function browseTo(p){
+  const d=await get('/api/browse?p='+encodeURIComponent(p)); BP=d.path; $('bpath').value=d.path;
+  $('blist').innerHTML=d.entries.map(e=>`<div class="it" onclick="${e.dir?
+    `browseTo('${e.path.replace(/'/g,"\\'")}')`:`pickFile('${e.path.replace(/'/g,"\\'")}')`}">
+    <span style="color:var(--dim)">${e.dir?'▸':'·'}</span>${e.name}</div>`).join('')
+    ||'<div class="it muted">nothing usable here</div>';
+}
+function browseUp(){browseTo(BP.replace(/\/[^/]+$/,'')||'/')}
+function pickFile(p){$('src').value=p;closeBrowse()}
+function pickHere(){$('src').value=BP;closeBrowse()}
+</script>
+</body>
+</html>
