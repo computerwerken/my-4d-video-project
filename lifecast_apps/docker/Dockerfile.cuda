@@ -1,0 +1,91 @@
+# CUDA build/render image for jg stereo editor's vve_cli.
+# Captures the EXACT steps validated on RunPod (RTX 4090, Ubuntu 24.04,
+# CUDA 12.8 toolkit) on 2026-07-17: full build of //source:vve_cli, DA3-fused
+# depth phase verified on real VR180 footage at ~0.36 s/frame.
+#
+# Build:  docker build -f Dockerfile.cuda --build-arg CUDA_ARCHS=compute_89 -t jgse-cli .
+#         (compute_89 = RTX 4090 / L40S, compute_80 = A100, compute_86 = 3090)
+# Run:    docker run --gpus all -v /data:/data jgse-cli \
+#           --src_vr180 /data/clip.mov --dest_dir /data/out --depth_method da3_fused
+#
+# da3_stereo.pt is NOT baked in (518 MB). Generate it with
+# scripts/export_da3_torchscript.py or fetch at container start via DA3_MODEL_URL.
+
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+
+ARG CUDA_ARCHS=compute_89
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- apt deps (validated set; libglib2.0-dev is needed by opencv_linux) -------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg git git-lfs unzip python3 python3-venv python3-pip \
+    build-essential \
+    libeigen3-dev libglfw3-dev libglfw3 libceres-dev kdialog \
+    libopencv-dev libglib2.0-dev libomp-dev libturbojpeg libturbojpeg0-dev \
+    libcpprest-dev libssl-dev \
+    ffmpeg libavcodec-dev libavformat-dev libavutil-dev \
+    libx264-dev libx265-dev libavcodec-extra \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Bazel 7.2.0 via bazelisk (validated; simpler than the apt pin) -----------
+RUN curl -fsSL -o /usr/local/bin/bazel \
+      https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 && \
+    chmod +x /usr/local/bin/bazel
+ENV USE_BAZEL_VERSION=7.2.0
+
+# --- libtorch 2.5.1+cu124 with the validated symlink set ----------------------
+# (cu124 libtorch runs fine alongside the 12.8 toolkit; hashed lib names below
+# are specific to 2.5.1+cu124 and match WORKSPACE's libtorch_linux srcs.)
+RUN curl -fsSL -o /tmp/libtorch.zip \
+      "https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu124.zip" && \
+    unzip -q /tmp/libtorch.zip -d /usr/local && rm /tmp/libtorch.zip && \
+    mv /usr/local/libtorch /usr/local/torch && \
+    cd /usr/local/torch/lib && \
+    for f in libcudart-*.so.12 libnvToolsExt-*.so.1 libnvrtc-*.so.12 libgomp-*.so.1; do \
+      b=$(echo $f | sed 's/-[a-f0-9]*\.so/.so/'); ln -sf $f $b; done && \
+    ln -sf libnvrtc-builtins.so libnvrtc-builtins.so.12 && \
+    ln -sf libnvrtc-builtins.so libnvrtc-builtins.so.12.4
+ENV LD_LIBRARY_PATH=/usr/local/torch/lib
+
+# --- repo + the three Linux WORKSPACE fixes validated on the pod --------------
+# 1) opencv_linux: apt opencv lives in /usr, not /usr/local (source-build path)
+# 2) opencv_linux: libs are under lib/x86_64-linux-gnu on Debian/Ubuntu
+# 3) drop -lopencv_xfeatures2d (contrib module Ubuntu doesn't ship; unused by
+#    the LDI pipeline - only the SfM/Gaussian side references xfeatures2d)
+WORKDIR /workspace
+RUN git lfs install && \
+    git clone --branch jg-stereo-editor --depth 1 \
+      https://github.com/computerwerken/my-4d-video-project.git repo && \
+    cd repo && git lfs pull
+RUN cd /workspace/repo/lifecast_apps && python3 - <<'EOF'
+w = open('WORKSPACE').read()
+w = w.replace('path = "/usr/local/",', 'path = "/usr",', 1)
+w = w.replace('"lib/libopencv_*.so*",', '"lib/x86_64-linux-gnu/libopencv_*.so*",', 1)
+w = w.replace('"-lopencv_xfeatures2d",', '')
+open('WORKSPACE', 'w').write(w)
+print('WORKSPACE patched for apt opencv')
+EOF
+
+# --- build the headless CLI ---------------------------------------------------
+WORKDIR /workspace/repo/lifecast_apps
+RUN bazel build -c opt --cuda_archs=${CUDA_ARCHS} //source:vve_cli && \
+    cp -L bazel-bin/source/vve_cli /usr/local/bin/vve_cli
+
+# --- entrypoint: optionally fetch the DA3 model, then run vve_cli -------------
+ENV DA3_MODEL_URL=""
+COPY <<'EOF' /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+EXTRA=""
+if [ -n "$DA3_MODEL_URL" ]; then
+  if [ ! -f /workspace/da3_stereo.pt ]; then
+    echo "Fetching DA3 model..."
+    curl -fsSL -o /workspace/da3_stereo.pt "$DA3_MODEL_URL"
+  fi
+  EXTRA="--da3_model_path=/workspace/da3_stereo.pt"
+fi
+exec vve_cli "$@" $EXTRA
+EOF
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
