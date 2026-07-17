@@ -1273,3 +1273,14 @@ p11_cc_test(
     ":projection",
   ],
 )
+
+
+p11_cc_binary(
+      name = "vve_cli",
+      srcs = ["vve_cli.cc"],
+      deps = [
+              "//source:gflags_xplatform",
+              ":logger",
+              ":ldi_pipeline_lib",
+      ],
+)
