@@ -12,7 +12,7 @@ Edit > Preferences > Add-ons > Install... > `jg4d_ldi3_player.py`, enable
 
 ## Use
 
-1. Keep your VVE-rendered VR180 video as a 
+1. Keep your VVE-rendered VR180 video as a PNG sequence
 2. 3D View > Sidebar (N) > jg4d > **Import LDI3**. Pick any frame of the
    sequence.
 3. Scene frame N shows sequence file N (cycling past the end).
