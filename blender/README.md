@@ -1,24 +1,21 @@
 # jg4d LDI3 player for Blender
 
 Imports Lifecast LDI3 volumetric photos/video as **three real displaced layer
-meshes**. Cycles/Eevee then handle occlusion, stereo, and lighting natively —
-CG objects placed in the scene are correctly occluded by LDI foreground and
-correctly occlude LDI background, per-pixel, both engines.
+meshes**. Cycles/Eevee handle occlusion, stereo, and lighting natively —
+CG objects placed in the scene should be correctly occluded by LDI foreground and
+correctly occlude LDI background.
 
 ## Install
 
 Edit > Preferences > Add-ons > Install... > `jg4d_ldi3_player.py`, enable
-"jg4d LDI3 player". Blender 3.0+ (tested 3.0; written for 4.x too).
+"jg4d LDI3 player". Blender 3.0+
 
 ## Use
 
-1. Convert your LDI3 video to frames (frame-perfect by construction):
-   `ffmpeg -i uno.mp4 uno_ldi3_%06d.png`
-   (or keep VVE's pre-encode `ldi3_%06d.png` intermediates — same thing,
-   16-bit clean, no codec round-trip.)
+1. Keep your VVE-rendered VR180 video as a 
 2. 3D View > Sidebar (N) > jg4d > **Import LDI3**. Pick any frame of the
-   sequence (a lone `.png`/`.jpg` imports as a still).
-3. Scene frame N shows sequence file N (cycling past the end). Scrub away.
+   sequence.
+3. Scene frame N shows sequence file N (cycling past the end).
 4. **Setup stereo camera** enables Multi-View at the capture point with
    red-cyan anaglyph output (63 mm interaxial, off-axis convergence).
 
@@ -34,8 +31,7 @@ frames):
 ```
 
 New depth backends in VVE (RAFT / DA3 / FoundationStereo) don't change the
-LDI3 container — different constants or future layout tweaks go in the
-sidecar, not the code. After editing parameters use **Refresh depth**.
+LDI3 container. After editing parameters use **Refresh depth**.
 
 ## How it works (~450 lines, on purpose)
 
