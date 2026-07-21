@@ -1,26 +1,16 @@
 #!/bin/bash
-# Robust finisher: build colour + depth plates from the existing depth/stabilize
-# output, run inpaint with both plates, sanity-check, encode H.264. Every step
-# is checked so a silent failure aborts loudly instead of producing garbage.
+# Robust finisher: build colour+depth plates (build_plates.py, self-verifying),
+# run inpaint with both plates, sanity-check, encode H.264. Aborts loudly on any
+# failure instead of producing garbage.
 set -uo pipefail
 OUT=/workspace/nestt_plate
 S=/workspace/my-4d-video-project/lifecast_apps/scripts
 CLI=/workspace/my-4d-video-project/lifecast_apps/bazel-bin/source/vve_cli
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/usr/local/torch/lib
-
 die(){ echo "FINISH_FAIL: $*"; exit 1; }
-readable(){ python3 -c "import cv2,sys; a=cv2.imread(sys.argv[1],-1); sys.exit(0 if a is not None else 1)" "$1"; }
 
-echo "=== colour plate ==="
-python3 "$S/make_plate.py" --frames_dir "$OUT" --pattern 'R_ftheta_[0-9]*.png' \
-  --out /workspace/plate.png --max_samples 121 --strip_height 256 || die "colour make_plate exit $?"
-readable /workspace/plate.png || die "colour plate not readable after write"
-
-echo "=== depth plate ==="
-python3 "$S/make_plate.py" --frames_dir "$OUT" --pattern 'filtered_R_depth_[0-9]*.png' \
-  --out /workspace/plate_depth.png --max_samples 121 --strip_height 256 || die "depth make_plate exit $?"
-readable /workspace/plate_depth.png || die "depth plate not readable after write"
-python3 -c "import cv2;c=cv2.imread('/workspace/plate.png');d=cv2.imread('/workspace/plate_depth.png',-1);print('PLATES_OK colour',c.shape,c.dtype,'depth',d.shape,d.dtype)"
+echo "=== build plates ==="
+python3 "$S/build_plates.py" "$OUT" || die "build_plates exit $?"
 
 echo "=== inpaint with plates ==="
 LIFECAST_PLATE_PATH=/workspace/plate.png LIFECAST_DEPTH_PLATE_PATH=/workspace/plate_depth.png \
