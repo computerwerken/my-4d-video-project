@@ -123,7 +123,7 @@
       <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
       <label title="Render at half resolution (faster on very large clips)"><input type="checkbox" id="halfres"> half-res</label>
     </div>
-    <div id="statusbar">no media — drop LDI3 clips here</div>
+    <div id="statusbar">no media — drop your LDI3 clip here</div>
   </div>
 </div>
 
@@ -466,11 +466,24 @@ function disposeMedia() {
   media = null;
 }
 
-const CODEC_HELP =
-  '<b>This file will not play in a browser.</b>\n' +
-  'Most likely it is ProRes (common for .mov exports) — browsers cannot decode ProRes at all.\n' +
-  'Convert to H.264 .mp4 first, e.g.:\n' +
-  '    ffmpeg -i input.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -an output.mp4';
+// Tailored advice: .mov failures are almost always ProRes; .mp4 failures on a
+// big LDI3 export are almost always HEVC exceeding the hardware decoder.
+function codecHelp(name) {
+  const isMov = /\.mov(\?|$)/i.test(name);
+  if (isMov) {
+    return '<b>This file will not play in a browser.</b>\n' +
+      'Most likely it is ProRes (common for .mov exports) - browsers cannot decode ProRes at all.\n' +
+      'Convert to H.264 .mp4 first:\n' +
+      '    ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -an clip.mp4';
+  }
+  return '<b>This file will not play in this browser.</b>\n' +
+    'If it is HEVC/H.265: Chrome can only decode HEVC in hardware, and a very large frame\n' +
+    '(e.g. 5760x5760) can exceed what the hardware decoder accepts, so it silently fails.\n' +
+    'Two fixes, either works:\n' +
+    '  1. Try Safari, which is more permissive with HEVC.\n' +
+    '  2. Re-encode to H.264, which Chrome decodes in software at any size:\n' +
+    '     ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -an clip.mp4';
+}
 
 function showMedia(url, name) {
   const item = { url, name, isPhoto: /\.(jpe?g|png)(\?|$)/i.test(name) };
@@ -505,7 +518,7 @@ function showMedia(url, name) {
     v.addEventListener('error', () => {
       const code = v.error ? v.error.code : 0;
       setError(code === 4
-        ? CODEC_HELP + '\n\nfile: ' + item.name
+        ? codecHelp(item.name) + '\n\nfile: ' + item.name
         : '<b>cannot load:</b> ' + item.name + ' (media error ' + code + ')');
     });
 
@@ -528,7 +541,7 @@ function showMedia(url, name) {
     // If nothing has decoded after a while, say so instead of showing black.
     media.watchdog = setTimeout(() => {
       if (media && media.video === v && v.readyState === 0 && !errDiv.innerHTML) {
-        setError(CODEC_HELP + '\n\nfile: ' + item.name + '  (no frames decoded)');
+        setError(codecHelp(item.name) + '\n\nfile: ' + item.name + '  (no frames decoded after 8s)');
       }
     }, 8000);
 
