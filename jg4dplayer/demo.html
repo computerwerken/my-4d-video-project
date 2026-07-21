@@ -8,10 +8,10 @@
 <link rel="apple-touch-icon" href="jgcat.png">
 <meta name="theme-color" content="#000000">
 <!--
-  jg 4d demo — fullscreen MONO (no anaglyph, no transitions) LDI3 playlist viewer.
+  jg 4d demo — fullscreen MONO (no anaglyph) single-clip LDI3 looper.
   Same UI as jg 4d player; renders a single camera instead of a stereo pair.
-  Load several LDI3 .mp4 clips; each loops. Click (or press ->) to cut to the next.
-  Exactly one video element is alive at a time, which matters for large clips.
+  Tuned for one clip on repeat: auto-loads ?src=... or ./clip.mp4 when served,
+  keeps exactly one video element alive, and only redraws on new decoded frames.
 
   LDI3 decoding (mesh + shaders) adapted from Lifecast's open-source player
   (MIT License, Copyright (c) 2021-2024 Lifecast Incorporated; see /web/lifecast_res).
@@ -105,7 +105,7 @@
 <div id="hud">
   <div id="titlebar">
     <img src="jgcat_64.png" alt="">
-    <span>jg 4d demo<span id="ver"> v2</span></span>
+    <span>jg 4d demo<span id="ver"> v3</span></span>
     <span class="tspacer"></span>
     <button class="tbtn" id="min_btn" title="collapse">_</button>
     <button class="tbtn" id="fs_btn" title="fullscreen (F)">&#9633;</button>
@@ -115,11 +115,7 @@
     <div class="row">
       <button class="btn" id="open_btn" title="Select one or more LDI3 clips">open...</button>
       <button class="btn" id="play_btn" title="space">play</button>
-      <input type="file" id="file_input" multiple accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
-    </div>
-    <div class="row">
-      <button class="btn nav" id="prev_btn" title="previous clip (left arrow)">|&lt;</button>
-      <button class="btn nav" id="next_btn" title="next clip (click / right arrow)">&gt;|</button>
+      <input type="file" id="file_input" accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
       <span id="clipname" style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
     </div>
     <div class="row checks">
@@ -136,21 +132,23 @@
   <pre><span class="tex">  .       .   ~      .        .    ~     .       .   </span>
 +======================================================+
 |                 j g   4 d   d e m o                  |
-|              mono LDI3 playlist viewer               |
+|                single-clip LDI3 loop                 |
 +======================================================+
 |                                                      |
-|   drop one or more LDI3 .mp4 files here, or use      |
-|   [ open... ] - they queue up in filename order      |
+|   drop your LDI3 .mp4 anywhere on this page,         |
+|   or use [ open... ] in the controls                 |
+|                                                      |
+|   tip: a file named clip.mp4 next to this page       |
+|   loads and loops automatically, no clicking         |
 |                                                      |
 +------------------------------------------------------+
-|   click / -> ... next clip  space ..... play/pause   |
-|   &lt;- ........... previous   f ......... fullscreen   |
-|   drag ......... look       r ......... reset view   |
-|   w a s d q e .. move       m ......... mute         |
-|   scroll ....... dolly      g ......... raw grid     |
-|   1 2 3 ........ layers     h ......... controls     |
+|   drag ......... look       space ..... play/pause   |
+|   w a s d q e .. move       f ......... fullscreen   |
+|   scroll ....... dolly      r ......... reset view   |
+|   1 2 3 ........ layers     m ......... mute         |
+|   g ............ raw grid   h ......... controls     |
 +------------------------------------------------------+
-|    each clip loops; click to cut to the next one     |
+|    the clip loops forever; no anaglyph, mono view    |
 +======================================================+
 <span class="tex">      .    ~       .       .      ~   .          .    </span></pre>
 </div>
@@ -351,7 +349,7 @@ const app = document.getElementById('app');
 const hud = document.getElementById('hud');
 const hint = document.getElementById('hint');
 const errDiv = document.getElementById('err');
-console.log("jg 4d demo v2 (mono, playlist, hard cuts)");
+console.log("jg 4d demo v3 (mono, single clip on loop)");
 
 let renderer, camera, scene, quadCam;
 let probeRT = null, probeMat = null, probeScene = null;
@@ -361,11 +359,11 @@ let layerVisible = [true, true, true];
 let rangeFixOn = false, rangeProbed = false;
 let panelClosed = false;
 
-// Playlist. Exactly ONE video element exists at a time: large LDI3 clips are
-// software-decoded and keeping two alive can starve the decoder.
-let playlist = [];        // [{url, name, isPhoto}]
-let curIndex = -1;
+// Single clip on repeat. Exactly ONE video element ever exists: large LDI3
+// clips are expensive to decode and a second one only steals bandwidth.
 let media = null;         // {video, texture, mesh, name, watchdog}
+let objectUrl = null;     // revoked when a new file is opened
+let loopCount = 0;
 
 const rig = new THREE.Group();
 let yaw = 0, pitch = 0;
@@ -474,13 +472,13 @@ const CODEC_HELP =
   'Convert to H.264 .mp4 first, e.g.:\n' +
   '    ffmpeg -i input.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -an output.mp4';
 
-function showMedia(index) {
-  const item = playlist[index];
-  if (!item) return;
+function showMedia(url, name) {
+  const item = { url, name, isPhoto: /\.(jpe?g|png)(\?|$)/i.test(name) };
   setError("");
   disposeMedia();
   hint.style.display = "none";
   rangeProbed = false;
+  loopCount = 0;
 
   media = { video: null, texture: null, mesh: null, name: item.name, watchdog: null };
 
@@ -523,6 +521,10 @@ function showMedia(index) {
       dirty = true;
     });
 
+    // Count laps so you can confirm at a glance that the loop is healthy.
+    v.addEventListener('seeked', () => { if (v.currentTime < 0.25) { loopCount++; updateClipUI(); } });
+    v.addEventListener('ended',  () => { loopCount++; updateClipUI(); });
+
     // If nothing has decoded after a while, say so instead of showing black.
     media.watchdog = setTimeout(() => {
       if (media && media.video === v && v.readyState === 0 && !errDiv.innerHTML) {
@@ -548,44 +550,27 @@ function showMedia(index) {
 
   media.mesh = new Ldi3Mesh(decode12, media.texture, rangeFixOn);
   scene.add(media.mesh);
-  curIndex = index;
   updateClipUI();
   dirty = true;
 }
 
-function goTo(index) {
-  if (playlist.length === 0) return;
-  index = (index + playlist.length) % playlist.length;
-  if (index === curIndex && media) return;
-  showMedia(index);
-}
-function next() { goTo(curIndex + 1); }
-function prev() { goTo(curIndex - 1); }
-
-function loadPlaylist(files) {
-  setError("");
-  disposeMedia();
-  for (const p of playlist) URL.revokeObjectURL(p.url);
-
-  const arr = Array.from(files).sort((a, b) =>
-    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-  playlist = arr.map(f => ({
-    url: URL.createObjectURL(f), name: f.name,
-    isPhoto: /\.(jpe?g|png)$/i.test(f.name)
-  }));
-  if (playlist.length === 0) return;
-  curIndex = -1;
-  showMedia(0);
+// Open a local File (drag-drop or the open... button).
+function loadFile(file) {
+  if (!file) return;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  showMedia(objectUrl, file.name);
 }
 
 function updateClipUI() {
-  const item = playlist[curIndex];
-  if (!item) return;
-  document.getElementById('clipname').textContent = item.name;
-  let dims = "";
-  if (media && media.video && media.video.videoWidth)
-    dims = "  " + media.video.videoWidth + "x" + media.video.videoHeight;
-  setStatus(`[${curIndex + 1}/${playlist.length}] ${item.name}${dims}`);
+  if (!media) return;
+  document.getElementById('clipname').textContent = media.name;
+  const v = media.video;
+  let info = media.name;
+  if (v && v.videoWidth) info += "  " + v.videoWidth + "x" + v.videoHeight;
+  if (v && v.duration && isFinite(v.duration)) info += "  " + v.duration.toFixed(1) + "s";
+  if (loopCount > 0) info += "  loop " + loopCount;
+  setStatus(info);
   updatePlayBtn();
 }
 
@@ -672,23 +657,9 @@ function frame() {
 // ============================== input ========================================
 init();
 
-let dragging = false, downAt = null;
-app.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;
-  dragging = true;
-  downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
-});
-window.addEventListener('mouseup', e => {
-  if (e.button !== 0) return;
-  dragging = false;
-  // A click (not a drag) cuts to the next clip, PowerPoint-style.
-  const onHud = (e.target instanceof Node) && hud.contains(e.target);
-  if (downAt && !onHud) {
-    const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
-    if (moved < 5 && performance.now() - downAt.t < 400) next();
-  }
-  downAt = null;
-});
+let dragging = false;
+app.addEventListener('mousedown', e => { if (e.button === 0) dragging = true; });
+window.addEventListener('mouseup', e => { if (e.button === 0) dragging = false; });
 window.addEventListener('mousemove', e => {
   showHud();
   if (!dragging) return;
@@ -707,9 +678,8 @@ app.addEventListener('wheel', e => {
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (["w","a","s","d","q","e","shift"].includes(k)) { keys.add(k); return; }
-  if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); next(); }
-  else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); prev(); }
-  else if (k === " ") { e.preventDefault(); togglePlay(); }
+  if (k === " ") { e.preventDefault(); togglePlay(); }
+  else if (k === "o") document.getElementById('file_input').click();
   else if (k === "f") toggleFullscreen();
   else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
   else if (k === "m") { const vv = media && media.video; if (vv) vv.muted = !vv.muted; }
@@ -770,12 +740,10 @@ document.getElementById('close_btn').onclick = () => {
 // HUD controls
 document.getElementById('open_btn').onclick = () => document.getElementById('file_input').click();
 document.getElementById('file_input').addEventListener('change', e => {
-  if (e.target.files.length) loadPlaylist(e.target.files);
+  if (e.target.files.length) loadFile(e.target.files[0]);
 });
 document.getElementById('play_btn').onclick = togglePlay;
 document.getElementById('fs_btn').onclick = toggleFullscreen;
-document.getElementById('next_btn').onclick = next;
-document.getElementById('prev_btn').onclick = prev;
 document.getElementById('bit12').addEventListener('change', e => {
   decode12 = e.target.checked; rebuildMesh();
 });
@@ -793,8 +761,22 @@ window.addEventListener('dragleave', e => { if (e.relatedTarget === null) dropEl
 window.addEventListener('drop', e => {
   e.preventDefault();
   dropEl.classList.remove('active');
-  if (e.dataTransfer.files.length) loadPlaylist(e.dataTransfer.files);
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
 });
+
+// ---- auto-load ----------------------------------------------------------
+// ?src=whatever.mp4 wins; otherwise, if this page is being served over http
+// and a file named clip.mp4 sits next to it, load that with no interaction.
+// (file:// can't probe for neighbours, so there we just wait for a drop.)
+(async () => {
+  const src = new URLSearchParams(window.location.search).get('src');
+  if (src) { showMedia(src, src.split('/').pop()); return; }
+  if (location.protocol === 'file:') return;
+  try {
+    const r = await fetch('clip.mp4', { method: 'HEAD' });
+    if (r.ok) showMedia('clip.mp4', 'clip.mp4');
+  } catch (_) { /* no neighbour file; stay on the intro sheet */ }
+})();
 </script>
 </body>
 </html>
