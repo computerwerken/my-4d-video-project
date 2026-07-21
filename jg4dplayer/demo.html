@@ -8,10 +8,10 @@
 <link rel="apple-touch-icon" href="jgcat.png">
 <meta name="theme-color" content="#000000">
 <!--
-  jg 4d demo — fullscreen MONO (no anaglyph) LDI3 playlist viewer.
+  jg 4d demo — fullscreen MONO (no anaglyph, no transitions) LDI3 playlist viewer.
   Same UI as jg 4d player; renders a single camera instead of a stereo pair.
-  Load several LDI3 .mov/.mp4 clips, each loops; click (or press ->) to
-  advance to the next clip with a stipple/halftone dissolve transition.
+  Load several LDI3 .mp4 clips; each loops. Click (or press ->) to cut to the next.
+  Exactly one video element is alive at a time, which matters for large clips.
 
   LDI3 decoding (mesh + shaders) adapted from Lifecast's open-source player
   (MIT License, Copyright (c) 2021-2024 Lifecast Incorporated; see /web/lifecast_res).
@@ -58,21 +58,6 @@
   }
   .btn:active { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
   .btn.nav { min-width:0; padding:3px 9px; }
-  .slab { width:56px; }
-  .sval { width:44px; text-align:right; }
-  input[type=range] { -webkit-appearance:none; appearance:none; flex:1; height:20px;
-                      background:transparent; margin:0; cursor:pointer; }
-  input[type=range]::-webkit-slider-runnable-track {
-    height:2px; background:#808080; border-bottom:1px solid #fff; }
-  input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance:none; width:12px; height:19px; margin-top:-9px; background:#c0c0c0;
-    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
-                inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
-  input[type=range]::-moz-range-track { height:2px; background:#808080; border-bottom:1px solid #fff; }
-  input[type=range]::-moz-range-thumb {
-    width:12px; height:19px; border:none; border-radius:0; background:#c0c0c0;
-    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
-                inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
   .checks { flex-wrap:wrap; gap:5px 12px; }
   .checks label { display:flex; align-items:center; gap:5px; cursor:pointer; }
   input[type=checkbox] {
@@ -101,10 +86,11 @@
   #hint pre { margin:0; font-family:inherit; font-size:13px; line-height:1.3; text-align:left; }
   #hint .tex { color:#999; }
 
-  #err { position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
-         background:#fff; color:#c00; border:1px solid #000; padding:2px 10px;
-         font-size:13px; z-index:20; }
+  #err { position:fixed; bottom:0; left:0; right:0; max-height:40%;
+         background:#fff; color:#000; border-top:1px solid #000; padding:8px 14px;
+         font-size:13px; line-height:1.5; z-index:20; white-space:pre-wrap; }
   #err:empty { display:none; }
+  #err b { color:#c00; }
   #drop.active::after {
     content:"[ drop LDI3 files ]"; position:fixed; inset:14px;
     display:flex; align-items:center; justify-content:center;
@@ -119,7 +105,7 @@
 <div id="hud">
   <div id="titlebar">
     <img src="jgcat_64.png" alt="">
-    <span>jg 4d demo<span id="ver"> v1</span></span>
+    <span>jg 4d demo<span id="ver"> v2</span></span>
     <span class="tspacer"></span>
     <button class="tbtn" id="min_btn" title="collapse">_</button>
     <button class="tbtn" id="fs_btn" title="fullscreen (F)">&#9633;</button>
@@ -129,25 +115,17 @@
     <div class="row">
       <button class="btn" id="open_btn" title="Select one or more LDI3 clips">open...</button>
       <button class="btn" id="play_btn" title="space">play</button>
-      <input type="file" id="file_input" multiple accept=".mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
+      <input type="file" id="file_input" multiple accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
     </div>
     <div class="row">
       <button class="btn nav" id="prev_btn" title="previous clip (left arrow)">|&lt;</button>
       <button class="btn nav" id="next_btn" title="next clip (click / right arrow)">&gt;|</button>
       <span id="clipname" style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
     </div>
-    <div class="row" title="Dissolve duration between clips, in seconds">
-      <label class="slab" for="dur">dissolve</label>
-      <input type="range" id="dur" min="10" max="400" step="5" value="120"><span class="sval" id="dur_val">1.2s</span>
-    </div>
-    <div class="row" title="Stipple dot size for the dissolve, in pixels">
-      <label class="slab" for="dot">stipple</label>
-      <input type="range" id="dot" min="1" max="28" step="1" value="7"><span class="sval" id="dot_val">7px</span>
-    </div>
     <div class="row checks">
       <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
       <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
-      <label title="Render at half resolution (faster)"><input type="checkbox" id="halfres"> half-res</label>
+      <label title="Render at half resolution (faster on very large clips)"><input type="checkbox" id="halfres"> half-res</label>
     </div>
     <div id="statusbar">no media — drop LDI3 clips here</div>
   </div>
@@ -161,8 +139,8 @@
 |              mono LDI3 playlist viewer               |
 +======================================================+
 |                                                      |
-|   drop one or more *_ldi3 .mov/.mp4 files here,      |
-|   or use [ open... ] - they queue up in order        |
+|   drop one or more LDI3 .mp4 files here, or use      |
+|   [ open... ] - they queue up in filename order      |
 |                                                      |
 +------------------------------------------------------+
 |   click / -> ... next clip  space ..... play/pause   |
@@ -172,7 +150,7 @@
 |   scroll ....... dolly      g ......... raw grid     |
 |   1 2 3 ........ layers     h ......... controls     |
 +------------------------------------------------------+
-|    clips loop; click to dissolve to the next one     |
+|    each clip loops; click to cut to the next one     |
 +======================================================+
 <span class="tex">      .    ~       .       .      ~   .          .    </span></pre>
 </div>
@@ -287,29 +265,6 @@ varying vec2 vUv;
 void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
 `;
 
-// Stipple / halftone dissolve: the screen is divided into cells of uDot pixels.
-// Each cell gets a pseudo-random phase so cells "open" in a scattered order, and
-// within a cell a dot grows until it covers the cell. At uProgress=1 every cell
-// is fully covered, so the new clip is guaranteed to be complete.
-const dissolveFrag = `
-precision highp float;
-uniform sampler2D texA, texB;
-uniform float uProgress, uDot;
-varying vec2 vUv;
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
-void main() {
-  vec2 fc   = gl_FragCoord.xy;
-  vec2 cell = floor(fc / uDot);
-  vec2 ctr  = (cell + 0.5) * uDot;
-  float ph  = hash(cell);                                  // per-cell stagger
-  float t   = clamp(uProgress * 1.7 - ph * 0.7, 0.0, 1.0);  // local progress
-  float r   = t * uDot * 0.80;                              // dot radius
-  float d   = length(fc - ctr);
-  float m   = 1.0 - smoothstep(r - 1.0, r + 1.0, d);        // 1 = show new clip
-  gl_FragColor = vec4(mix(texture2D(texA, vUv).rgb, texture2D(texB, vUv).rgb, m), 1.0);
-}
-`;
-
 // ============================== LDI3 mesh ====================================
 // Adapted from Lifecast's Ldi3Mesh.js (MIT License).
 const NUM_LAYERS = 3;
@@ -396,10 +351,9 @@ const app = document.getElementById('app');
 const hud = document.getElementById('hud');
 const hint = document.getElementById('hint');
 const errDiv = document.getElementById('err');
-console.log("jg 4d demo v1 (mono, playlist, stipple dissolve)");
+console.log("jg 4d demo v2 (mono, playlist, hard cuts)");
 
-let renderer, camera, quadCam;
-let rtA = null, rtB = null, dissolveScene, dissolveMat;
+let renderer, camera, scene, quadCam;
 let probeRT = null, probeMat = null, probeScene = null;
 let debugGrid = false, debugScene = null, debugMat = null;
 let dirty = true, decode12 = true, halfRes = false;
@@ -407,77 +361,63 @@ let layerVisible = [true, true, true];
 let rangeFixOn = false, rangeProbed = false;
 let panelClosed = false;
 
-// Playlist + two media slots (current + preloaded next) for the dissolve.
+// Playlist. Exactly ONE video element exists at a time: large LDI3 clips are
+// software-decoded and keeping two alive can starve the decoder.
 let playlist = [];        // [{url, name, isPhoto}]
 let curIndex = -1;
-let slots = [null, null]; // slot objects
-let activeSlot = 0;
-let transition = null;    // {from, to, start, dur}
-let dissolveDur = 1.2, dotSize = 7;
+let media = null;         // {video, texture, mesh, name, watchdog}
 
 const rig = new THREE.Group();
 let yaw = 0, pitch = 0;
 const keys = new Set();
 
-function setError(msg) { errDiv.textContent = msg || ""; }
+function setError(html) { errDiv.innerHTML = html || ""; }
 function setStatus(msg) { document.getElementById('statusbar').textContent = msg; }
 
 function init() {
-  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.autoClear = false;
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   app.appendChild(renderer.domElement);
 
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  scene.add(rig);
+
   camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 110);
   rig.add(camera);
-
   quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  dissolveMat = new THREE.ShaderMaterial({
-    vertexShader: quadVert, fragmentShader: dissolveFrag,
-    uniforms: { texA: { value: null }, texB: { value: null },
-                uProgress: { value: 0 }, uDot: { value: dotSize } },
-    depthTest: false, depthWrite: false });
-  dissolveScene = new THREE.Scene();
-  dissolveScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dissolveMat));
 
-  makeRenderTargets();
   window.addEventListener('resize', onResize);
   renderer.setAnimationLoop(frame);
-}
-
-function makeRenderTargets() {
-  if (rtA) { rtA.dispose(); rtB.dispose(); }
-  const scale = halfRes ? 0.5 : 1.0;
-  const w = Math.max(2, Math.floor(window.innerWidth * window.devicePixelRatio * scale));
-  const h = Math.max(2, Math.floor(window.innerHeight * window.devicePixelRatio * scale));
-  const opts = { format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-                 minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-                 depthBuffer: true, samples: halfRes ? 0 : 4 };
-  rtA = new THREE.WebGLRenderTarget(w, h, opts);
-  rtB = new THREE.WebGLRenderTarget(w, h, opts);
-  dirty = true;
 }
 
 function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  makeRenderTargets();
+  dirty = true;
+}
+
+function applyResolution() {
+  // half-res simply lowers the device pixel ratio; the browser upscales.
+  renderer.setPixelRatio(window.devicePixelRatio * (halfRes ? 0.5 : 1));
+  renderer.setSize(window.innerWidth, window.innerHeight);
   dirty = true;
 }
 
 function setRangeFix(on) {
   rangeFixOn = on;
   document.getElementById('tvfix').checked = on;
-  for (const s of slots) if (s && s.mesh) s.mesh.uniforms.uRangeFix.value = on ? 1.0 : 0.0;
+  if (media && media.mesh) media.mesh.uniforms.uRangeFix.value = on ? 1.0 : 0.0;
   dirty = true;
 }
 
-// Measure what the video texture actually delivers to WebGL (see player notes):
-// layer 0's alpha cell is mostly white, so white ~235 means unexpanded TV range.
-function probeVideoRangeGL(slot) {
-  if (!slot || !slot.texture) return;
+// Measure what the video texture actually delivers to WebGL: layer 0's alpha
+// cell is mostly white, so a white median near 235 means unexpanded TV range.
+function probeVideoRangeGL() {
+  if (!media || !media.texture) return;
   if (!probeRT) {
     probeRT = new THREE.WebGLRenderTarget(32, 32, { depthBuffer: false });
     probeMat = new THREE.ShaderMaterial({
@@ -488,7 +428,7 @@ function probeVideoRangeGL(slot) {
     probeScene = new THREE.Scene();
     probeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), probeMat));
   }
-  probeMat.uniforms.uTex.value = slot.texture;
+  probeMat.uniforms.uTex.value = media.texture;
   renderer.setRenderTarget(probeRT);
   renderer.clear(true, false, false);
   renderer.render(probeScene, quadCam);
@@ -505,7 +445,7 @@ function probeVideoRangeGL(slot) {
   console.log("jg4d range probe: white median =", med, "-> tv-fix", med < 245);
 }
 
-// ============================== media slots ==================================
+// ============================== media ========================================
 function configureTexture(t) {
   t.format = THREE.RGBAFormat;
   t.type = THREE.UnsignedByteType;
@@ -514,84 +454,118 @@ function configureTexture(t) {
   t.generateMipmaps = false;
 }
 
-function makeSlot(item, index, autoplay) {
-  const slot = { scene: new THREE.Scene(), video: null, texture: null, mesh: null,
-                 name: item.name, isPhoto: item.isPhoto, ready: false,
-                 playlistIndex: index };
-  slot.scene.background = new THREE.Color(0x000000);
+function disposeMedia() {
+  if (!media) return;
+  clearTimeout(media.watchdog);
+  if (media.mesh) { scene.remove(media.mesh); media.mesh.dispose(); }
+  if (media.texture) media.texture.dispose();
+  if (media.video) {
+    media.video.pause();
+    media.video.removeAttribute('src');
+    media.video.load();
+    media.video.remove();
+  }
+  media = null;
+}
+
+const CODEC_HELP =
+  '<b>This file will not play in a browser.</b>\n' +
+  'Most likely it is ProRes (common for .mov exports) — browsers cannot decode ProRes at all.\n' +
+  'Convert to H.264 .mp4 first, e.g.:\n' +
+  '    ffmpeg -i input.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -an output.mp4';
+
+function showMedia(index) {
+  const item = playlist[index];
+  if (!item) return;
+  setError("");
+  disposeMedia();
+  hint.style.display = "none";
+  rangeProbed = false;
+
+  media = { video: null, texture: null, mesh: null, name: item.name, watchdog: null };
 
   if (item.isPhoto) {
-    slot.texture = new THREE.TextureLoader().setCrossOrigin('anonymous').load(item.url,
-      () => { slot.ready = true; dirty = true; },
+    media.texture = new THREE.TextureLoader().setCrossOrigin('anonymous').load(item.url,
+      () => { dirty = true; },
       undefined,
-      () => setError("failed to load image: " + item.name));
-    configureTexture(slot.texture);
+      () => setError("<b>cannot load image:</b> " + item.name));
+    configureTexture(media.texture);
+    setRangeFix(false);
+    rangeProbed = true;
   } else {
     const v = document.createElement('video');
     v.setAttribute('crossorigin', 'anonymous');
     v.setAttribute('playsinline', '');
-    v.loop = true;          // each clip loops until you advance
-    v.muted = true;         // required for autoplay; M unmutes
+    v.loop = true;      // each clip loops until you advance
+    v.muted = true;     // required for autoplay; M unmutes
     v.preload = "auto";
     v.style.display = "none";
     v.src = item.url;
     document.body.appendChild(v);
-    v.addEventListener('error', () => setError("failed to load: " + item.name));
-    v.addEventListener('canplay', () => { slot.ready = true; });
-    slot.video = v;
-    slot.texture = new THREE.VideoTexture(v);
-    configureTexture(slot.texture);
+    media.video = v;
+
+    v.addEventListener('error', () => {
+      const code = v.error ? v.error.code : 0;
+      setError(code === 4
+        ? CODEC_HELP + '\n\nfile: ' + item.name
+        : '<b>cannot load:</b> ' + item.name + ' (media error ' + code + ')');
+    });
+
+    v.addEventListener('loadedmetadata', () => {
+      // LDI3 is a 3x3 grid, so the frame must be square. Anything else is a
+      // regular video and will render as garbage through the LDI3 shaders.
+      if (v.videoWidth !== v.videoHeight) {
+        setError('<b>not an LDI3 clip:</b> ' + item.name + ' is ' + v.videoWidth + 'x' +
+                 v.videoHeight + '.\nLDI3 exports are square (e.g. 5760x5760). ' +
+                 'This looks like a normal video, not a Volumetric Video Editor LDI3 export.');
+      }
+      updateClipUI();
+      dirty = true;
+    });
+
+    // If nothing has decoded after a while, say so instead of showing black.
+    media.watchdog = setTimeout(() => {
+      if (media && media.video === v && v.readyState === 0 && !errDiv.innerHTML) {
+        setError(CODEC_HELP + '\n\nfile: ' + item.name + '  (no frames decoded)');
+      }
+    }, 8000);
+
+    media.texture = new THREE.VideoTexture(v);
+    configureTexture(media.texture);
 
     if ('requestVideoFrameCallback' in v) {
       const onFrame = () => {
-        if (!slot.texture) return;
-        slot.texture.needsUpdate = true;
-        slot.ready = true;
+        if (!media || media.video !== v) return;
+        media.texture.needsUpdate = true;
         dirty = true;
-        if (!rangeProbed && v.readyState >= 2 && slots[activeSlot] === slot) probeVideoRangeGL(slot);
+        if (!rangeProbed && v.readyState >= 2) probeVideoRangeGL();
         v.requestVideoFrameCallback(onFrame);
       };
       v.requestVideoFrameCallback(onFrame);
     }
-    // Preloaded (background) clips buffer without playing; they start on cue.
-    if (autoplay) v.play().catch(() => {});
+    v.play().catch(() => { /* needs a gesture; the play button covers it */ });
   }
 
-  slot.mesh = new Ldi3Mesh(decode12, slot.texture, rangeFixOn);
-  slot.scene.add(slot.mesh);
-  // NOTE: the camera rig is parented into whichever scene renderSlot draws.
-  return slot;
+  media.mesh = new Ldi3Mesh(decode12, media.texture, rangeFixOn);
+  scene.add(media.mesh);
+  curIndex = index;
+  updateClipUI();
+  dirty = true;
 }
 
-function disposeSlot(slot) {
-  if (!slot) return;
-  if (slot.mesh) { slot.scene.remove(slot.mesh); slot.mesh.dispose(); }
-  if (slot.texture) slot.texture.dispose();
-  if (slot.video) {
-    slot.video.pause(); slot.video.removeAttribute('src');
-    slot.video.load(); slot.video.remove();
-  }
-  slot.mesh = null; slot.texture = null; slot.video = null;
+function goTo(index) {
+  if (playlist.length === 0) return;
+  index = (index + playlist.length) % playlist.length;
+  if (index === curIndex && media) return;
+  showMedia(index);
 }
+function next() { goTo(curIndex + 1); }
+function prev() { goTo(curIndex - 1); }
 
-// The camera rig lives in whichever scene we are about to draw.
-function renderSlot(slot, rt) {
-  if (!slot || !slot.mesh) return;
-  if (rig.parent !== slot.scene) slot.scene.add(rig);
-  renderer.setRenderTarget(rt);
-  renderer.clear(true, true, false);
-  for (let k = 0; k < NUM_LAYERS; ++k)
-    for (const m of slot.mesh.layer_to_meshes[k]) m.visible = layerVisible[k];
-  renderer.render(slot.scene, camera);
-}
-
-// ============================== playlist ======================================
 function loadPlaylist(files) {
   setError("");
-  for (const s of slots) disposeSlot(s);
-  slots = [null, null];
-  transition = null;
-  rangeProbed = false;
+  disposeMedia();
+  for (const p of playlist) URL.revokeObjectURL(p.url);
 
   const arr = Array.from(files).sort((a, b) =>
     a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
@@ -600,91 +574,39 @@ function loadPlaylist(files) {
     isPhoto: /\.(jpe?g|png)$/i.test(f.name)
   }));
   if (playlist.length === 0) return;
-
-  hint.style.display = "none";
-  curIndex = 0;
-  activeSlot = 0;
-  slots[0] = makeSlot(playlist[0], 0, true);
-  preloadNext();
-  updateClipUI();
-  dirty = true;
-}
-
-function preloadNext() {
-  if (playlist.length < 2) return;
-  const nextIdx = (curIndex + 1) % playlist.length;
-  const other = 1 - activeSlot;
-  disposeSlot(slots[other]);
-  slots[other] = makeSlot(playlist[nextIdx], nextIdx, false);
-}
-
-function goTo(index, direction) {
-  if (playlist.length === 0 || transition) return;
-  index = (index + playlist.length) % playlist.length;
-  if (index === curIndex) return;
-
-  const other = 1 - activeSlot;
-  // Reuse the preloaded slot when it already holds the target clip.
-  if (!(slots[other] && slots[other].playlistIndex === index && slots[other].mesh)) {
-    disposeSlot(slots[other]);
-    slots[other] = makeSlot(playlist[index], index, false);
-  }
-  const to = slots[other];
-  if (to.video) to.video.play().catch(() => {});
-
-  transition = { from: activeSlot, to: other, start: performance.now(), dur: dissolveDur * 1000 };
-  curIndex = index;
-  updateClipUI();
-  dirty = true;
-}
-
-function next() { goTo(curIndex + 1, +1); }
-function prev() { goTo(curIndex - 1, -1); }
-
-function finishTransition() {
-  const oldSlot = transition.from;
-  activeSlot = transition.to;
-  transition = null;
-  const old = slots[oldSlot];
-  if (old && old.video) old.video.pause();
-  preloadNext();          // stage the following clip into the freed slot
-  updatePlayBtn();
-  dirty = true;
+  curIndex = -1;
+  showMedia(0);
 }
 
 function updateClipUI() {
   const item = playlist[curIndex];
   if (!item) return;
   document.getElementById('clipname').textContent = item.name;
-  setStatus(`[${curIndex + 1}/${playlist.length}] ${item.name}`);
+  let dims = "";
+  if (media && media.video && media.video.videoWidth)
+    dims = "  " + media.video.videoWidth + "x" + media.video.videoHeight;
+  setStatus(`[${curIndex + 1}/${playlist.length}] ${item.name}${dims}`);
   updatePlayBtn();
 }
 
-function activeVideo() {
-  const s = slots[activeSlot];
-  return s ? s.video : null;
-}
-
 function togglePlay() {
-  const v = activeVideo();
+  const v = media && media.video;
   if (!v) return;
   if (v.paused || v.ended) v.play(); else v.pause();
   setTimeout(updatePlayBtn, 50);
 }
 function updatePlayBtn() {
   const b = document.getElementById('play_btn');
-  const v = activeVideo();
+  const v = media && media.video;
   b.style.display = v ? "" : "none";
   if (v) b.textContent = (v.paused || v.ended) ? "play" : "pause";
 }
 
-function rebuildAllMeshes() {
-  for (const s of slots) {
-    if (!s || !s.texture) continue;
-    if (s.mesh) { s.scene.remove(s.mesh); s.mesh.dispose(); }
-    s.mesh = new Ldi3Mesh(decode12, s.texture, rangeFixOn);
-    s.scene.add(s.mesh);
-  }
+function rebuildMesh() {
+  if (!media || !media.texture) return;
+  if (media.mesh) { scene.remove(media.mesh); media.mesh.dispose(); }
+  media.mesh = new Ldi3Mesh(decode12, media.texture, rangeFixOn);
+  scene.add(media.mesh);
   dirty = true;
 }
 
@@ -695,7 +617,7 @@ function frame() {
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
 
-  if (keys.size > 0 && slots[activeSlot]) {
+  if (keys.size > 0 && media) {
     const speed = (keys.has('shift') ? 4.5 : 1.5) * dt;
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -709,16 +631,13 @@ function frame() {
   }
 
   // Safari fallback (no requestVideoFrameCallback)
-  for (const s of slots) {
-    if (s && s.video && !('requestVideoFrameCallback' in s.video) &&
-        !s.video.paused && s.video.readyState >= 2) {
-      s.texture.needsUpdate = true; dirty = true;
-      if (!rangeProbed && s === slots[activeSlot]) probeVideoRangeGL(s);
-    }
+  const v = media && media.video;
+  if (v && !('requestVideoFrameCallback' in v) && !v.paused && v.readyState >= 2) {
+    media.texture.needsUpdate = true; dirty = true;
+    if (!rangeProbed) probeVideoRangeGL();
   }
 
-  if (transition) dirty = true;
-  if (!dirty || !slots[activeSlot]) return;
+  if (!dirty || !media || !media.mesh) return;
   dirty = false;
 
   rig.rotation.set(0, 0, 0);
@@ -735,30 +654,19 @@ function frame() {
       debugScene = new THREE.Scene();
       debugScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), debugMat));
     }
-    debugMat.uniforms.uTex.value = slots[activeSlot].texture;
+    debugMat.uniforms.uTex.value = media.texture;
     renderer.setRenderTarget(null);
     renderer.clear(true, true, false);
     renderer.render(debugScene, quadCam);
     return;
   }
 
-  if (transition) {
-    const p = Math.min(1, (now - transition.start) / transition.dur);
-    renderSlot(slots[transition.from], rtA);
-    renderSlot(slots[transition.to], rtB);
-    dissolveMat.uniforms.texA.value = rtA.texture;
-    dissolveMat.uniforms.texB.value = rtB.texture;
-    dissolveMat.uniforms.uProgress.value = p;
-    dissolveMat.uniforms.uDot.value = dotSize * window.devicePixelRatio;
-    renderer.setRenderTarget(null);
-    renderer.clear(true, true, false);
-    renderer.render(dissolveScene, quadCam);
-    if (p >= 1) finishTransition();
-    return;
-  }
-
-  // Normal path: straight to the screen, no post-processing.
-  renderSlot(slots[activeSlot], null);
+  // All three layers in ONE render call, ordered by renderOrder.
+  renderer.setRenderTarget(null);
+  renderer.clear(true, true, false);
+  for (let k = 0; k < NUM_LAYERS; ++k)
+    for (const m of media.mesh.layer_to_meshes[k]) m.visible = layerVisible[k];
+  renderer.render(scene, camera);
 }
 
 // ============================== input ========================================
@@ -773,8 +681,7 @@ app.addEventListener('mousedown', e => {
 window.addEventListener('mouseup', e => {
   if (e.button !== 0) return;
   dragging = false;
-  // A click (not a drag) advances to the next clip, PowerPoint-style.
-  // (e.target is not always a Node — guard before calling contains.)
+  // A click (not a drag) cuts to the next clip, PowerPoint-style.
   const onHud = (e.target instanceof Node) && hud.contains(e.target);
   if (downAt && !onHud) {
     const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
@@ -800,13 +707,12 @@ app.addEventListener('wheel', e => {
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (["w","a","s","d","q","e","shift"].includes(k)) { keys.add(k); return; }
-  // Presenter remotes send arrows / PageUp / PageDown.
   if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); next(); }
   else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); prev(); }
   else if (k === " ") { e.preventDefault(); togglePlay(); }
   else if (k === "f") toggleFullscreen();
   else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
-  else if (k === "m") { const v = activeVideo(); if (v) v.muted = !v.muted; }
+  else if (k === "m") { const vv = media && media.video; if (vv) vv.muted = !vv.muted; }
   else if (k === "g") { debugGrid = !debugGrid; dirty = true; }
   else if (k === "h") {
     panelClosed = !panelClosed;
@@ -870,22 +776,14 @@ document.getElementById('play_btn').onclick = togglePlay;
 document.getElementById('fs_btn').onclick = toggleFullscreen;
 document.getElementById('next_btn').onclick = next;
 document.getElementById('prev_btn').onclick = prev;
-document.getElementById('dur').addEventListener('input', e => {
-  dissolveDur = e.target.value / 100;
-  document.getElementById('dur_val').textContent = dissolveDur.toFixed(1) + "s";
-});
-document.getElementById('dot').addEventListener('input', e => {
-  dotSize = parseInt(e.target.value);
-  document.getElementById('dot_val').textContent = dotSize + "px";
-});
 document.getElementById('bit12').addEventListener('change', e => {
-  decode12 = e.target.checked; rebuildAllMeshes();
+  decode12 = e.target.checked; rebuildMesh();
 });
 document.getElementById('tvfix').addEventListener('change', e => {
   rangeProbed = true; setRangeFix(e.target.checked);
 });
 document.getElementById('halfres').addEventListener('change', e => {
-  halfRes = e.target.checked; makeRenderTargets();
+  halfRes = e.target.checked; applyResolution();
 });
 
 // Drag & drop (accepts a whole batch of clips)
