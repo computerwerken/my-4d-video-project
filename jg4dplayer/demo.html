@@ -105,7 +105,7 @@
 <div id="hud">
   <div id="titlebar">
     <img src="jgcat_64.png" alt="">
-    <span>jg 4d demo<span id="ver"> v3</span></span>
+    <span>jg 4d demo<span id="ver"> v4</span></span>
     <span class="tspacer"></span>
     <button class="tbtn" id="min_btn" title="collapse">_</button>
     <button class="tbtn" id="fs_btn" title="fullscreen (F)">&#9633;</button>
@@ -115,7 +115,7 @@
     <div class="row">
       <button class="btn" id="open_btn" title="Select one or more LDI3 clips">open...</button>
       <button class="btn" id="play_btn" title="space">play</button>
-      <input type="file" id="file_input" accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png" style="display:none">
+      <input type="file" id="file_input" multiple accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png,.json" style="display:none">
       <span id="clipname" style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
     </div>
     <div class="row checks">
@@ -196,6 +196,7 @@ float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
 const fgVert = `
 precision highp float;
 uniform sampler2D uTexture;
+uniform float uInvDepthCoef;
 varying vec2 vUv;
 ` + rangeFix + decode12bit + `
 void main() {
@@ -205,7 +206,7 @@ void main() {
 #else
   float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.33333333));
 #endif
-  float s = clamp(0.3 / depth_sample, 0.01, 50.0);
+  float s = clamp(uInvDepthCoef / depth_sample, 0.01, 50.0);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
 }
 `;
@@ -233,12 +234,13 @@ void main() {
 const bgVert = `
 precision highp float;
 uniform sampler2D uTexture;
+uniform float uInvDepthCoef;
 varying vec2 vUv;
 ` + rangeFix + decode12bit + `
 void main() {
   vUv = uv;
   float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.0));
-  float s = clamp(0.3 / depth_sample, 0.01, 50.0);
+  float s = clamp(uInvDepthCoef / depth_sample, 0.01, 50.0);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
 }
 `;
@@ -266,13 +268,18 @@ void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
 // ============================== LDI3 mesh ====================================
 // Adapted from Lifecast's Ldi3Mesh.js (MIT License).
 const NUM_LAYERS = 3;
-const FTHETA_SCALE = 1.15;
+// These two come from the VVE export's JSON sidecar. The values below are the
+// defaults (and happen to match nestt1_1's sidecar); a loaded sidecar overrides
+// them so a differently-tuned export still renders with correct geometry/depth.
+let fthetaScale = 1.15;   // sidecar: ftheta_scale (fisheye field-of-view scale)
+let invDepthCoef = 0.3;   // sidecar: inv_depth_coef (depth displacement scale)
 
 class Ldi3Mesh extends THREE.Object3D {
   constructor(decode_12bit, texture, rangeOn) {
     super();
     this.layer_to_meshes = Array.from({length: NUM_LAYERS}, () => []);
-    this.uniforms = { uTexture: { value: texture }, uRangeFix: { value: rangeOn ? 1.0 : 0.0 } };
+    this.uniforms = { uTexture: { value: texture }, uRangeFix: { value: rangeOn ? 1.0 : 0.0 },
+                      uInvDepthCoef: { value: invDepthCoef } };
     const prefix = decode_12bit ? "#define DECODE_12BIT\n" : "";
 
     const mat0 = new THREE.ShaderMaterial({
@@ -310,7 +317,7 @@ class Ldi3Mesh extends THREE.Object3D {
         const u = ii / NUM_QUADS_PER_SIDE, v = jj / NUM_QUADS_PER_SIDE;
         const a = 2.0 * (u - 0.5), b = 2.0 * (v - 0.5);
         const theta = Math.atan2(b, a);
-        let r = Math.sqrt(a * a + b * b) / FTHETA_SCALE;
+        let r = Math.sqrt(a * a + b * b) / fthetaScale;
         r = 0.5 * r + 0.5 * Math.pow(r, ftheta_inflation);
         const phi = r * Math.PI / 2.0;
         verts.push(Math.cos(theta) * Math.sin(phi), Math.sin(theta) * Math.sin(phi), -Math.cos(phi));
@@ -349,7 +356,7 @@ const app = document.getElementById('app');
 const hud = document.getElementById('hud');
 const hint = document.getElementById('hint');
 const errDiv = document.getElementById('err');
-console.log("jg 4d demo v3 (mono, single clip on loop)");
+console.log("jg 4d demo v4 (mono, single clip on loop, calibration sidecar)");
 
 let renderer, camera, scene, quadCam;
 let probeRT = null, probeMat = null, probeScene = null;
@@ -565,9 +572,59 @@ function showMedia(url, name) {
   scene.add(media.mesh);
   updateClipUI();
   dirty = true;
+  maybeFetchSidecar(url); // async; applies + rebuilds if a sidecar is found
 }
 
-// Open a local File (drag-drop or the open... button).
+// ---- calibration sidecar ------------------------------------------------
+// A VVE export can ship a JSON sidecar of geometry/depth constants. Applying it
+// keeps the render correct even if a future export is tuned differently.
+// Recognized keys: ftheta_scale, inv_depth_coef, decode_12bit.
+function applySidecar(sc, label) {
+  if (!sc || typeof sc !== 'object') return;
+  const changed = [];
+  if (typeof sc.ftheta_scale === 'number')  { fthetaScale = sc.ftheta_scale;  changed.push('ftheta_scale=' + fthetaScale); }
+  if (typeof sc.inv_depth_coef === 'number'){ invDepthCoef = sc.inv_depth_coef; changed.push('inv_depth_coef=' + invDepthCoef); }
+  if (typeof sc.decode_12bit === 'boolean') { decode12 = sc.decode_12bit; document.getElementById('bit12').checked = decode12; changed.push('12bit=' + decode12); }
+  console.log('jg4d sidecar' + (label ? ' [' + label + ']' : '') + ':', changed.join('  ') || '(no recognized keys)');
+  if (media && media.texture) rebuildMesh(); // re-apply to the clip already showing
+}
+
+// When served over http(s), look for a sidecar next to the clip. Tries, in order:
+//   ?sidecar=NAME  ·  <clipstem>.json  ·  <prefix-before-_ldi3>_jg4d_sidecar.json
+async function maybeFetchSidecar(url) {
+  if (!/^https?:/i.test(url)) return;   // blob:/file: can't resolve neighbours
+  const noQ = url.split('?')[0];
+  const dir = noQ.slice(0, noQ.lastIndexOf('/') + 1);
+  const stem = noQ.slice(noQ.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+  const cands = [];
+  const q = new URLSearchParams(location.search).get('sidecar');
+  if (q) cands.push(new URL(q, location.href).href);
+  cands.push(dir + stem + '.json');
+  const pre = stem.replace(/_ldi3.*$/i, '');
+  if (pre && pre !== stem) cands.push(dir + pre + '_jg4d_sidecar.json');
+  for (const c of cands) {
+    try {
+      const r = await fetch(c);
+      if (r.ok) { applySidecar(await r.json(), c.slice(c.lastIndexOf('/') + 1)); return; }
+    } catch (_) { /* try next candidate */ }
+  }
+}
+
+// Open one or more local Files (drag-drop or the open... button). A .json is
+// treated as a sidecar; the first non-json is the clip. Sidecar is applied
+// first so the clip's mesh is built with the right parameters.
+async function loadFiles(list) {
+  const files = Array.from(list);
+  const jsonF  = files.find(f => /\.json$/i.test(f.name));
+  const mediaF = files.find(f => !/\.json$/i.test(f.name));
+  if (jsonF) {
+    try { applySidecar(JSON.parse(await jsonF.text()), jsonF.name); }
+    catch (_) { setError('<b>bad sidecar JSON:</b> ' + jsonF.name); }
+  }
+  if (mediaF) loadFile(mediaF);
+  else if (jsonF && media && media.texture) rebuildMesh();
+}
+
 function loadFile(file) {
   if (!file) return;
   if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -753,7 +810,7 @@ document.getElementById('close_btn').onclick = () => {
 // HUD controls
 document.getElementById('open_btn').onclick = () => document.getElementById('file_input').click();
 document.getElementById('file_input').addEventListener('change', e => {
-  if (e.target.files.length) loadFile(e.target.files[0]);
+  if (e.target.files.length) loadFiles(e.target.files);
 });
 document.getElementById('play_btn').onclick = togglePlay;
 document.getElementById('fs_btn').onclick = toggleFullscreen;
@@ -774,7 +831,7 @@ window.addEventListener('dragleave', e => { if (e.relatedTarget === null) dropEl
 window.addEventListener('drop', e => {
   e.preventDefault();
   dropEl.classList.remove('active');
-  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
 });
 
 // ---- auto-load ----------------------------------------------------------
