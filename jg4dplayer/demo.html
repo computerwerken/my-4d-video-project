@@ -774,7 +774,9 @@ window.addEventListener('mouseup', e => {
   if (e.button !== 0) return;
   dragging = false;
   // A click (not a drag) advances to the next clip, PowerPoint-style.
-  if (downAt && !hud.contains(e.target)) {
+  // (e.target is not always a Node — guard before calling contains.)
+  const onHud = (e.target instanceof Node) && hud.contains(e.target);
+  if (downAt && !onHud) {
     const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
     if (moved < 5 && performance.now() - downAt.t < 400) next();
   }
