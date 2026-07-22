@@ -122,6 +122,10 @@
       <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
       <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
       <label title="Render at half resolution (faster on very large clips)"><input type="checkbox" id="halfres"> half-res</label>
+      <label title="Match mesh tessellation to the depth map's true resolution (sharper geometry, more vertices)"><input type="checkbox" id="detail" checked> hi-mesh</label>
+    </div>
+    <div class="row" id="seekrow" style="display:none">
+      <input type="range" id="seek" min="0" max="1000" step="1" value="0"><span class="sval" id="time_val">0:00</span>
     </div>
     <div id="statusbar">no media — drop your LDI3 clip here</div>
   </div>
@@ -274,6 +278,16 @@ const NUM_LAYERS = 3;
 let fthetaScale = 1.15;   // sidecar: ftheta_scale (fisheye field-of-view scale)
 let invDepthCoef = 0.3;   // sidecar: inv_depth_coef (depth displacement scale)
 
+// Mesh tessellation, in quads per side per layer. Depth is sampled once per
+// VERTEX, so tessellation caps geometric detail regardless of depth quality.
+// In the "split12" LDI3 encoding the depth plane is HALF the colour resolution
+// (encodeDepthWithSplit12 downsamples invd to cols/2 before packing), so for a
+// 5760 grid each layer's depth is 960 across -> 960 quads matches it exactly.
+// The upstream default of 512 throws away about half of that detail.
+const MESH_QUADS_HI = 960;
+const MESH_QUADS_LO = 512;
+let meshQuads = MESH_QUADS_HI;
+
 class Ldi3Mesh extends THREE.Object3D {
   constructor(decode_12bit, texture, rangeOn) {
     super();
@@ -300,9 +314,14 @@ class Ldi3Mesh extends THREE.Object3D {
 
     this.materials = [mat0, mat1, mat2];
     const inflation = 3.0;
-    this.makeEquiangularMesh(mat0, 128, 4, 0, inflation);
-    this.makeEquiangularMesh(mat1, 128, 4, 1, inflation);
-    this.makeEquiangularMesh(mat2, 96, 4, 2, inflation);
+    // NUM_PATCHES=4 splits each layer into 16 buffers (keeps index counts sane);
+    // quads-per-side = GRID_SIZE * 4. Layer 2 is sparser, as upstream, since the
+    // top layer covers the least area.
+    const g  = Math.max(16, Math.round(meshQuads / 4));
+    const g2 = Math.max(16, Math.round(g * 0.75));
+    this.makeEquiangularMesh(mat0, g,  4, 0, inflation);
+    this.makeEquiangularMesh(mat1, g,  4, 1, inflation);
+    this.makeEquiangularMesh(mat2, g2, 4, 2, inflation);
   }
 
   makeEquiangularMesh(material, GRID_SIZE, NUM_PATCHES, order, ftheta_inflation) {
@@ -371,6 +390,13 @@ let panelClosed = false;
 let media = null;         // {video, texture, mesh, name, watchdog}
 let objectUrl = null;     // revoked when a new file is opened
 let loopCount = 0;
+let seeking = false;      // true while the scrub bar is being dragged
+
+function fmtTime(t) {
+  if (!isFinite(t)) return "0:00";
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
 
 const rig = new THREE.Group();
 let yaw = 0, pitch = 0;
@@ -541,9 +567,20 @@ function showMedia(url, name) {
       dirty = true;
     });
 
-    // Count laps so you can confirm at a glance that the loop is healthy.
-    v.addEventListener('seeked', () => { if (v.currentTime < 0.25) { loopCount++; updateClipUI(); } });
-    v.addEventListener('ended',  () => { loopCount++; updateClipUI(); });
+    // Loop counter + seek bar. Detect the wrap by time going backwards (with
+    // loop=true the 'ended' event never fires), and ignore it while scrubbing.
+    let prevT = 0;
+    v.addEventListener('timeupdate', () => {
+      if (!seeking && v.currentTime < prevT - 1.0) { loopCount++; updateClipUI(); }
+      prevT = v.currentTime;
+      if (!seeking && isFinite(v.duration) && v.duration > 0) {
+        document.getElementById('seek').value = Math.round(1000 * v.currentTime / v.duration);
+      }
+      document.getElementById('time_val').textContent = fmtTime(v.currentTime);
+    });
+    v.addEventListener('loadeddata', () => {
+      document.getElementById('seekrow').style.display = isFinite(v.duration) ? '' : 'none';
+    });
 
     // If nothing has decoded after a while, say so instead of showing black.
     media.watchdog = setTimeout(() => {
@@ -822,6 +859,22 @@ document.getElementById('tvfix').addEventListener('change', e => {
 });
 document.getElementById('halfres').addEventListener('change', e => {
   halfRes = e.target.checked; applyResolution();
+});
+document.getElementById('detail').addEventListener('change', e => {
+  meshQuads = e.target.checked ? MESH_QUADS_HI : MESH_QUADS_LO;
+  rebuildMesh();
+});
+
+// Scrub bar (matters once the clip is movie-length rather than a 25s loop)
+const seekEl = document.getElementById('seek');
+seekEl.addEventListener('pointerdown', () => { seeking = true; });
+window.addEventListener('pointerup',   () => { seeking = false; });
+seekEl.addEventListener('input', e => {
+  const v = media && media.video;
+  if (v && isFinite(v.duration) && v.duration > 0) {
+    v.currentTime = (e.target.value / 1000) * v.duration;
+    dirty = true;
+  }
 });
 
 // Drag & drop (accepts a whole batch of clips)
