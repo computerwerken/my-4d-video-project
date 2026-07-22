@@ -9,3 +9,16 @@ exports_files([
   "unet_mystery.pt",
   "depth_anything3_cuda.pt",
 ])
+
+# Depth Anything 3 stereo module, exported by scripts/export_da3_torchscript.py.
+# ~518 MB, so it is NOT committed - fetch it with scripts/fetch_models.sh.
+# This is a glob-backed filegroup rather than an exports_files entry on purpose:
+# a glob that matches nothing is legal and yields an empty filegroup, so the
+# repo still builds when the model is absent. Once the file exists it is placed
+# in runfiles at ml_models/da3_stereo.pt, which is the default path that
+# depth_anything3.cc looks for - so no flag is needed.
+filegroup(
+  name = "da3_stereo",
+  srcs = glob(["da3_stereo.pt"]),
+  visibility = ["//visibility:public"],
+)
