@@ -1,5 +1,6 @@
 // MIT License. Copyright (c) 2025 Lifecast Incorporated. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#include <cstdlib>
 #include "ldi_common.h"
 #include "opencv2/photo.hpp"
 #include "logger.h"
@@ -536,6 +537,41 @@ void makeLdiHeuristic(
     cv::imwrite(debug_dir + "/l1_inpainted_" + frame_num + ".png", inpainted_mid);
     cv::imwrite(debug_dir + "/l0_inpainted_depth_" + frame_num + ".png", l0_depth_16bit);
     cv::imwrite(debug_dir + "/l1_inpainted_depth_" + frame_num + ".png", l1_depth_16bit);
+  }
+
+  // Static-camera background plates (jg stereo editor).
+  // Colour: fill layer-0 disocclusions from a temporal-median plate - real
+  // background pixels from other frames of the same locked-off shot - applied
+  // only inside l0_inpaint_mask so wind-driven grass/foliage stays live.
+  if (const char* jg_plate_path = std::getenv("LIFECAST_PLATE_PATH")) {
+    cv::Mat jg_plate = cv::imread(jg_plate_path, cv::IMREAD_COLOR);
+    if (!jg_plate.empty() && !inpainted_bottom.empty()) {
+      if (jg_plate.size() != inpainted_bottom.size()) {
+        cv::resize(jg_plate, jg_plate, inpainted_bottom.size(), 0.0, 0.0, cv::INTER_CUBIC);
+      }
+      if (jg_plate.type() != inpainted_bottom.type()) {
+        jg_plate.convertTo(jg_plate, inpainted_bottom.type());
+      }
+      cv::Mat jg_mask = l0_inpaint_mask;
+      if (jg_mask.size() != inpainted_bottom.size()) {
+        cv::resize(jg_mask, jg_mask, inpainted_bottom.size(), 0.0, 0.0, cv::INTER_NEAREST);
+      }
+      jg_plate.copyTo(inpainted_bottom, jg_mask);
+    }
+  }
+  // Depth: freeze the background geometry. A locked-off camera sees constant
+  // background depth, so a median depth plate removes per-frame wobble.
+  if (const char* jg_dplate_path = std::getenv("LIFECAST_DEPTH_PLATE_PATH")) {
+    cv::Mat jg_dplate = cv::imread(jg_dplate_path, cv::IMREAD_UNCHANGED);
+    if (!jg_dplate.empty() && !l0_depth.empty()) {
+      if (jg_dplate.channels() > 1) cv::cvtColor(jg_dplate, jg_dplate, cv::COLOR_BGR2GRAY);
+      double jg_scale = (jg_dplate.depth() == CV_16U) ? 1.0 / 65535.0 : 1.0 / 255.0;
+      jg_dplate.convertTo(jg_dplate, CV_32F, jg_scale);
+      if (jg_dplate.size() != l0_depth.size()) {
+        cv::resize(jg_dplate, jg_dplate, l0_depth.size(), 0.0, 0.0, cv::INTER_LINEAR);
+      }
+      l0_depth = jg_dplate;
+    }
   }
 
   if (assemble_ldi) {

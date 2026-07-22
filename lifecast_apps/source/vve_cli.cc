@@ -16,10 +16,25 @@ DEFINE_string(dest_dir, "", "Output/working directory. Required.");
 DEFINE_string(output_filename, "", "Output name (photo mode).");
 DEFINE_string(cwd, "", "Working directory override.");
 DEFINE_bool(rm_dest_dir, false, "Delete dest_dir before starting.");
-DEFINE_string(output_encoding, "h264", "Output encoding.");
+DEFINE_string(
+    output_encoding,
+    "split12",
+    "LDI3 grid encoding: split12 (default; 12-bit depth, what the jg4d Blender player "
+    "and the web player decode) | 8bit | 16bit. WARNING: make6DofGrid only scales pixel "
+    "data for these three values - any other value leaves float 0-1 data and writes "
+    "BLACK frames.");
 DEFINE_bool(photo_mode, false, "Run the still-photo pipeline.");
-DEFINE_int32(ftheta_size, 2048, "f-theta projection size.");
-DEFINE_int32(inflated_ftheta_size, 0, "inflated f-theta size.");
+DEFINE_int32(
+    ftheta_size,
+    2048,
+    "f-theta projection size. The output LDI3 grid is 3x this value "
+    "(1920 -> 5760x5760, 2048 -> 6144x6144).");
+DEFINE_int32(
+    inflated_ftheta_size,
+    0,
+    "Inflated f-theta size. 0 = use ftheta_size (recommended). Must be > 0 at the point "
+    "it reaches the pipeline: a 0-size warp camera produces an empty warp and BLACK "
+    "frames.");
 DEFINE_int32(rectified_size_for_depth, 1024, "rectified pair size for depth.");
 DEFINE_double(disparity_bias, 0.0, "disparity bias.");
 DEFINE_double(baseline_m, 0.060, "stereo baseline meters (R5C RF5.2mm = 0.060).");
@@ -69,7 +84,10 @@ int main(int argc, char** argv) {
   cfg.src_ftheta_image = FLAGS_src_ftheta_image; cfg.src_ftheta_depth = FLAGS_src_ftheta_depth;
   cfg.dest_dir = FLAGS_dest_dir; cfg.output_filename = FLAGS_output_filename;
   cfg.rm_dest_dir = FLAGS_rm_dest_dir; cfg.ftheta_size = FLAGS_ftheta_size;
-  cfg.inflated_ftheta_size = FLAGS_inflated_ftheta_size;
+  // Fall back to ftheta_size: a 0 inflated size builds a 0-pixel warp camera, which
+  // silently yields an empty warp and black LDI3 frames.
+  cfg.inflated_ftheta_size =
+      FLAGS_inflated_ftheta_size > 0 ? FLAGS_inflated_ftheta_size : FLAGS_ftheta_size;
   cfg.rectified_size_for_depth = FLAGS_rectified_size_for_depth;
   cfg.disparity_bias = FLAGS_disparity_bias; cfg.baseline_m = FLAGS_baseline_m;
   cfg.inv_depth_coef = FLAGS_inv_depth_coef; cfg.ftheta_scale = FLAGS_ftheta_scale;
@@ -83,6 +101,13 @@ int main(int argc, char** argv) {
   cfg.skip_every_other_frame = FLAGS_skip_every_other_frame;
   cfg.depth_method = FLAGS_depth_method; cfg.da3_blend = FLAGS_da3_blend;
   cfg.da3_model_path = FLAGS_da3_model_path;
+  if (cfg.output_encoding != "split12" && cfg.output_encoding != "8bit" &&
+      cfg.output_encoding != "16bit") {
+    XPLINFO << "FATAL: --output_encoding=" << cfg.output_encoding
+            << " would produce black frames. Use split12 (default), 8bit, or 16bit.";
+    return 1;
+  }
+  XPLINFO << "LDI3 grid will be " << (3 * cfg.ftheta_size) << "x" << (3 * cfg.ftheta_size);
   p11::ldi::printConfig(cfg);
   if (FLAGS_photo_mode) { p11::ldi::runVR180PhototoLdiPipeline(cfg); }
   else if (FLAGS_phase == "all") { p11::ldi::runVR180toLdi3VideoPipelineAllPhases(cfg); }
