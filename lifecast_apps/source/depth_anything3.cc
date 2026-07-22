@@ -93,7 +93,7 @@ void getTorchModelDepthAnything3(torch::jit::script::Module& module, std::string
           << (using_default_path
                   ? "This file is ~518 MB and is not distributed in the git repo.\n"
                     "Fetch it (from the repo root):\n"
-                    "    ./scripts/fetch_models.sh\n\n"
+                    "    bash scripts/fetch_models.sh\n\n"
                     "Or export it yourself:\n"
                     "    python3 scripts/export_da3_torchscript.py\n"
                     "    mv da3_stereo.pt ml_models/\n\n"
