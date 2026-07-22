@@ -545,6 +545,15 @@ void makeLdiHeuristic(
   // only inside l0_inpaint_mask so wind-driven grass/foliage stays live.
   if (const char* jg_plate_path = std::getenv("LIFECAST_PLATE_PATH")) {
     cv::Mat jg_plate = cv::imread(jg_plate_path, cv::IMREAD_COLOR);
+    // Report unreadable plates. Previously a typo'd path was indistinguishable
+    // from success: imread fails, the block is skipped, and the render finishes
+    // normally with no plate applied and nothing said about it.
+    if (jg_plate.empty()) {
+      XPLINFO << "WARNING: LIFECAST_PLATE_PATH set but unreadable, no colour plate applied: "
+              << jg_plate_path;
+    } else if (inpainted_bottom.empty()) {
+      XPLINFO << "WARNING: colour plate loaded but layer-0 image is empty; skipping plate.";
+    }
     if (!jg_plate.empty() && !inpainted_bottom.empty()) {
       if (jg_plate.size() != inpainted_bottom.size()) {
         cv::resize(jg_plate, jg_plate, inpainted_bottom.size(), 0.0, 0.0, cv::INTER_CUBIC);
@@ -557,12 +566,17 @@ void makeLdiHeuristic(
         cv::resize(jg_mask, jg_mask, inpainted_bottom.size(), 0.0, 0.0, cv::INTER_NEAREST);
       }
       jg_plate.copyTo(inpainted_bottom, jg_mask);
+      XPLINFO << "applied colour plate (disocclusions only): " << jg_plate_path;
     }
   }
   // Depth: freeze the background geometry. A locked-off camera sees constant
   // background depth, so a median depth plate removes per-frame wobble.
   if (const char* jg_dplate_path = std::getenv("LIFECAST_DEPTH_PLATE_PATH")) {
     cv::Mat jg_dplate = cv::imread(jg_dplate_path, cv::IMREAD_UNCHANGED);
+    if (jg_dplate.empty()) {
+      XPLINFO << "WARNING: LIFECAST_DEPTH_PLATE_PATH set but unreadable, depth not frozen: "
+              << jg_dplate_path;
+    }
     if (!jg_dplate.empty() && !l0_depth.empty()) {
       if (jg_dplate.channels() > 1) cv::cvtColor(jg_dplate, jg_dplate, cv::COLOR_BGR2GRAY);
       double jg_scale = (jg_dplate.depth() == CV_16U) ? 1.0 / 65535.0 : 1.0 / 255.0;
@@ -571,6 +585,7 @@ void makeLdiHeuristic(
         cv::resize(jg_dplate, jg_dplate, l0_depth.size(), 0.0, 0.0, cv::INTER_LINEAR);
       }
       l0_depth = jg_dplate;
+      XPLINFO << "applied depth plate (background depth frozen): " << jg_dplate_path;
     }
   }
 
