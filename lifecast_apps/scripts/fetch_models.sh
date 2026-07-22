@@ -5,9 +5,12 @@
 #   ml_models/rof_*.pt        git-lfs; this script only verifies they were pulled
 #
 # Usage:
-#   ./scripts/fetch_models.sh              # fetch anything missing
-#   ./scripts/fetch_models.sh --force      # re-download even if present
-#   DA3_MODEL_URL=... ./scripts/fetch_models.sh   # override the source URL
+#   bash scripts/fetch_models.sh            # fetch anything missing
+#   bash scripts/fetch_models.sh --force    # re-download even if present
+#   DA3_MODEL_URL=... bash scripts/fetch_models.sh   # override the source URL
+#
+# Invoked with `bash` because GitHub's web uploader stores files mode 644, so
+# the +x bit is not reliably present on a fresh clone.
 #
 # Exit codes: 0 ok, 1 fetch failed, 2 environment problem.
 
