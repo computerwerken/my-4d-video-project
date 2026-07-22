@@ -29,9 +29,17 @@ DPLATE=${DPLATE:-/workspace/plate_depth.png}
 OUTFILE=${OUTFILE:-/workspace/nestt1_1_ldi3_h264.mp4}
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/torch/lib
 
+# DA3 model. If it has been fetched into ml_models/ the runfiles default finds
+# it and no flag is needed, but existing pods keep it at /workspace, so honour
+# that when present rather than silently falling back and failing.
+DA3=${DA3:-}
+if [ -z "$DA3" ] && [ -f /workspace/da3_stereo.pt ]; then DA3=/workspace/da3_stereo.pt; fi
+DA3_FLAG=""
+[ -n "$DA3" ] && DA3_FLAG="--da3_model_path $DA3"
+
 # inpaint_method/seg_method/inpaint_dilate_radius/rectified_size_for_depth are
 # left at their defaults, which now match the GUI exactly.
-COMMON="--src_vr180 $SRC --dest_dir $OUT --depth_method da3_fused \
+COMMON="--src_vr180 $SRC --dest_dir $OUT --depth_method da3_fused $DA3_FLAG \
  --ftheta_size $WORK --inflated_ftheta_size $TILE \
  --output_encoding split12 --first_frame $FIRST --last_frame $LAST"
 
