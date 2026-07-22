@@ -14,3 +14,7 @@ MODULE.bazel.lock
 traced_raft_model*
 
 venv
+
+# DA3 model is distributed as a GitHub Release asset, not in git (~518 MB).
+# Fetch with scripts/fetch_models.sh
+ml_models/da3_stereo.pt

@@ -4,6 +4,9 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
+# Autodetect system-installed deps (Homebrew on macOS, OpenCV on Linux)
+load("//:system_deps.bzl", "homebrew_package", "local_opencv")
+
 
 # Hedron's Compile Commands Extractor for Bazel
 # https://github.com/hedronvision/bazel-compile-commands-extractor
@@ -244,9 +247,9 @@ bind(name = "eigen", actual = "@com_github_eigen_eigen//:eigen")
 ### ceres ###
 
 # ceres via homebrew for os x- seems to be much faster (multithreaded)
-new_local_repository(
+homebrew_package(
   name = "ceres_osx_homebrew",
-  path = "/usr/local/Cellar/ceres-solver/2.2.0_1",
+  formula = "ceres-solver",
   build_file_content =
 """
 cc_library(
@@ -302,9 +305,9 @@ cc_library(
 
 ### glfw ###
 
-new_local_repository(
+homebrew_package(
   name = "glfw_osx_homebrew",
-  path = "/usr/local/Cellar/glfw/3.4",
+  formula = "glfw",
   build_file_content =
 """
 cc_library(
@@ -388,9 +391,9 @@ cc_library(
 """
 )
 
-new_local_repository(
+homebrew_package(
   name = "ffmpeg_osx_homebrew",
-  path = "/usr/local/Cellar/ffmpeg/7.1.1_1",
+  formula = "ffmpeg",
   build_file_content =
 """
 cc_library(
@@ -403,9 +406,9 @@ cc_library(
 """
 )
 
-new_local_repository(
+homebrew_package(
   name = "opencv_osx_homebrew",
-  path = "/usr/local/Cellar/opencv/4.11.0_1",
+  formula = "opencv@4",
   build_file_content =
 """
 cc_library(
@@ -451,40 +454,10 @@ cc_library(
 )
 
 # Locally compiled opencv, see "README compile OpenCV Ubuntu.txt" for setup
-new_local_repository(
+# OpenCV is located automatically: apt (/usr, multiarch libdir) or a source
+# build (/usr/local). See local_opencv in system_deps.bzl.
+local_opencv(
   name = "opencv_linux",
-  path = "/usr/local/",  # This is where OpenCV gets installed by default when built from source
-  build_file_content =
-"""
-cc_library(
-  name = "opencv",
-  srcs = glob([
-    "lib/libopencv_*.so*",
-    "lib64/libopencv_*.so*",  # Include both in case your system uses lib64
-  ]),
-  hdrs = glob([
-    "include/opencv4/opencv2/**/*.h",
-    "include/opencv4/opencv2/**/*.hpp",
-    "include/opencv4/opencv2/*.hpp"
-  ]),
-  includes = ["include/opencv4"],
-  strip_include_prefix = "include/opencv4",
-  deps = ["@glib//:glib"],  
-  copts=["-O3"],
-  linkopts=[
-    "-lopencv_core", 
-    "-lopencv_features2d",
-    "-lopencv_flann",
-    "-lopencv_imgproc",
-    "-lopencv_calib3d",
-    "-lopencv_xfeatures2d",
-    "-lopencv_highgui",
-    "-lopencv_imgcodecs"
-  ],
-  visibility = ["//visibility:public"],
-  linkstatic = 1,
-)
-"""
 )
 
 ## start of dependencies for opencv_windows_vcpkg
@@ -698,9 +671,9 @@ cc_library(
 
 ### libjpeg-turbo ###
 
-new_local_repository(
+homebrew_package(
   name = "jpegturbo_osx_homebrew",
-  path = "/usr/local/Cellar/jpeg-turbo/3.1.1",
+  formula = "jpeg-turbo",
   build_file_content =
 """
 cc_library(
@@ -751,9 +724,9 @@ cc_library(
 # https://github.com/pytorch/pytorch/issues/63558#issuecomment-1116353447
 # "symbol not found in flat namespace '_PyBaseObject_Type' error in my Libtorch program was
 # resolved by removing/not linking to libtorch_python.dylib"
-new_local_repository(
+homebrew_package(
   name = "libtorch_osx_homebrew",
-  path = "/usr/local/Cellar/pytorch/2.5.1_4",
+  formula = "pytorch",
   build_file_content =
 """
 cc_library(
@@ -857,9 +830,9 @@ cc_library(
 
 ### cpprest ###
 
-new_local_repository(
+homebrew_package(
   name = "openssl_osx_homebrew",
-  path = "/usr/local/Cellar/openssl@3/3.4.1",
+  formula = "openssl@3",
   build_file_content =
 """
 cc_library(
@@ -874,9 +847,9 @@ cc_library(
 """
 )
 
-new_local_repository(
+homebrew_package(
   name = "boost_osx_homebrew",
-  path = "/usr/local/Cellar/boost/1.88.0",
+  formula = "boost",
   build_file_content =
 """
 cc_library(
@@ -891,9 +864,9 @@ cc_library(
 """
 )
 
-new_local_repository(
+homebrew_package(
   name = "cpprest_osx_homebrew",
-  path = "/usr/local/Cellar/cpprestsdk/2.10.19_2",
+  formula = "cpprestsdk",
   build_file_content =
 """
 cc_library(
