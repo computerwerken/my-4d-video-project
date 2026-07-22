@@ -324,12 +324,27 @@ class Ldi3Mesh extends THREE.Object3D {
     this.makeEquiangularMesh(mat2, g2, 4, 2, inflation);
   }
 
+  // Builds into preallocated typed arrays. The original push()-based version
+  // (inherited from the reference player) is fine at 512 quads/side but stalls
+  // the main thread for tens of seconds at 960, where it appends ~17M values to
+  // plain JS arrays. Typed arrays keep the rebuild near-instant at any density.
   makeEquiangularMesh(material, GRID_SIZE, NUM_PATCHES, order, ftheta_inflation) {
     const NUM_QUADS_PER_SIDE = NUM_PATCHES * GRID_SIZE;
     const MARGIN = 2;
+    const CULL_R2 = (NUM_QUADS_PER_SIDE + MARGIN) * (NUM_QUADS_PER_SIDE + MARGIN) / 4;
+    const VPS = GRID_SIZE + 1;                 // vertices per side, per patch
+    const HALF = NUM_QUADS_PER_SIDE / 2;
     for (let patch_j = 0; patch_j < NUM_PATCHES; ++patch_j)
     for (let patch_i = 0; patch_i < NUM_PATCHES; ++patch_i) {
-      const verts = [], indices = [], uvs = [];
+      // Skip whole patches that fall entirely outside the fisheye circle.
+      const cx = (patch_i + 0.5) * GRID_SIZE - HALF;
+      const cy = (patch_j + 0.5) * GRID_SIZE - HALF;
+      const patchR = GRID_SIZE * 0.7072;        // half-diagonal of the patch
+      if (Math.hypot(cx, cy) - patchR > Math.sqrt(CULL_R2)) continue;
+
+      const verts = new Float32Array(VPS * VPS * 3);
+      const uvs   = new Float32Array(VPS * VPS * 2);
+      let vi = 0, ui = 0;
       for (let j = 0; j <= GRID_SIZE; ++j)
       for (let i = 0; i <= GRID_SIZE; ++i) {
         const ii = i + patch_i * GRID_SIZE, jj = j + patch_j * GRID_SIZE;
@@ -339,22 +354,28 @@ class Ldi3Mesh extends THREE.Object3D {
         let r = Math.sqrt(a * a + b * b) / fthetaScale;
         r = 0.5 * r + 0.5 * Math.pow(r, ftheta_inflation);
         const phi = r * Math.PI / 2.0;
-        verts.push(Math.cos(theta) * Math.sin(phi), Math.sin(theta) * Math.sin(phi), -Math.cos(phi));
-        uvs.push(u, v);
+        const sp = Math.sin(phi);
+        verts[vi++] = Math.cos(theta) * sp;
+        verts[vi++] = Math.sin(theta) * sp;
+        verts[vi++] = -Math.cos(phi);
+        uvs[ui++] = u; uvs[ui++] = v;
       }
+
+      const idx = new Uint32Array(GRID_SIZE * GRID_SIZE * 6);
+      let n = 0;
       for (let j = 0; j < GRID_SIZE; ++j)
       for (let i = 0; i < GRID_SIZE; ++i) {
-        const ii = i + patch_i * GRID_SIZE, jj = j + patch_j * GRID_SIZE;
-        const di = ii - NUM_QUADS_PER_SIDE / 2, dj = jj - NUM_QUADS_PER_SIDE / 2;
-        if (di * di + dj * dj > (NUM_QUADS_PER_SIDE + MARGIN) * (NUM_QUADS_PER_SIDE + MARGIN) / 4) continue;
-        const a = i + (GRID_SIZE + 1) * j, b = a + 1, c = a + (GRID_SIZE + 1), d = c + 1;
-        indices.push(a, c, b, c, d, b);
+        const di = i + patch_i * GRID_SIZE - HALF, dj = j + patch_j * GRID_SIZE - HALF;
+        if (di * di + dj * dj > CULL_R2) continue;
+        const a = i + VPS * j, b = a + 1, c = a + VPS, d = c + 1;
+        idx[n++] = a; idx[n++] = c; idx[n++] = b;
+        idx[n++] = c; idx[n++] = d; idx[n++] = b;
       }
-      if (indices.length > 0) {
+      if (n > 0) {
         const g = new THREE.BufferGeometry();
-        g.setIndex(indices);
-        g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-        g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        g.setIndex(new THREE.BufferAttribute(idx.subarray(0, n), 1));
+        g.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
         const mesh = new THREE.Mesh(g, material);
         mesh.frustumCulled = false;
         mesh.renderOrder = order;
