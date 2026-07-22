@@ -8,8 +8,9 @@
 # Run:    docker run --gpus all -v /data:/data jgse-cli \
 #           --src_vr180 /data/clip.mov --dest_dir /data/out --depth_method da3_fused
 #
-# da3_stereo.pt is NOT baked in (518 MB). Generate it with
-# scripts/export_da3_torchscript.py or fetch at container start via DA3_MODEL_URL.
+# da3_stereo.pt is NOT baked in (518 MB). Set DA3_MODEL_URL to have the
+# entrypoint fetch it via scripts/fetch_models.sh, or bind-mount a copy to
+# /workspace/repo/lifecast_apps/ml_models/da3_stereo.pt.
 
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
 
@@ -47,42 +48,45 @@ RUN curl -fsSL -o /tmp/libtorch.zip \
     ln -sf libnvrtc-builtins.so libnvrtc-builtins.so.12.4
 ENV LD_LIBRARY_PATH=/usr/local/torch/lib
 
-# --- repo + the three Linux WORKSPACE fixes validated on the pod --------------
-# 1) opencv_linux: apt opencv lives in /usr, not /usr/local (source-build path)
-# 2) opencv_linux: libs are under lib/x86_64-linux-gnu on Debian/Ubuntu
-# 3) drop -lopencv_xfeatures2d (contrib module Ubuntu doesn't ship; unused by
-#    the LDI pipeline - only the SfM/Gaussian side references xfeatures2d)
+# --- repo ---------------------------------------------------------------------
+# No WORKSPACE patching needed: local_opencv in system_deps.bzl probes for the
+# apt layout (/usr + lib/x86_64-linux-gnu) vs a source build (/usr/local + lib),
+# and only links the opencv libs that are actually installed - so the missing
+# contrib module libopencv_xfeatures2d no longer breaks the link.
 WORKDIR /workspace
 RUN git lfs install && \
     git clone --branch jg-stereo-editor --depth 1 \
       https://github.com/computerwerken/my-4d-video-project.git repo && \
     cd repo && git lfs pull
-RUN cd /workspace/repo/lifecast_apps && python3 - <<'EOF'
-w = open('WORKSPACE').read()
-w = w.replace('path = "/usr/local/",', 'path = "/usr",', 1)
-w = w.replace('"lib/libopencv_*.so*",', '"lib/x86_64-linux-gnu/libopencv_*.so*",', 1)
-w = w.replace('"-lopencv_xfeatures2d",', '')
-open('WORKSPACE', 'w').write(w)
-print('WORKSPACE patched for apt opencv')
-EOF
 
 # --- build the headless CLI ---------------------------------------------------
 WORKDIR /workspace/repo/lifecast_apps
+# NOTE: do NOT `cp` the binary out of bazel-bin. vve_cli resolves its models
+# through a .runfiles tree that sits next to it, and a copied binary dies with
+# "cannot find runfiles". Install a wrapper that execs it in place instead.
 RUN bazel build -c opt --cuda_archs=${CUDA_ARCHS} //source:vve_cli && \
-    cp -L bazel-bin/source/vve_cli /usr/local/bin/vve_cli
+    printf '#!/bin/bash\nexec /workspace/repo/lifecast_apps/bazel-bin/source/vve_cli "$@"\n' \
+      > /usr/local/bin/vve_cli && \
+    chmod +x /usr/local/bin/vve_cli && \
+    /usr/local/bin/vve_cli --help >/dev/null 2>&1 || true
 
 # --- entrypoint: optionally fetch the DA3 model, then run vve_cli -------------
 ENV DA3_MODEL_URL=""
 COPY <<'EOF' /usr/local/bin/entrypoint.sh
 #!/bin/bash
 set -e
+# fetch_models.sh validates the download (zip magic + size) instead of silently
+# saving a 404 page as a .pt.
+ML=/workspace/repo/lifecast_apps/ml_models
 EXTRA=""
 if [ -n "$DA3_MODEL_URL" ]; then
-  if [ ! -f /workspace/da3_stereo.pt ]; then
-    echo "Fetching DA3 model..."
-    curl -fsSL -o /workspace/da3_stereo.pt "$DA3_MODEL_URL"
-  fi
-  EXTRA="--da3_model_path=/workspace/da3_stereo.pt"
+  /workspace/repo/lifecast_apps/scripts/fetch_models.sh || exit 1
+fi
+# The runfiles tree was materialized at image-build time, so a model that
+# arrived later (fetched here, or bind-mounted) is not in it. Point at it
+# explicitly rather than relying on the default runfiles lookup.
+if [ -f "$ML/da3_stereo.pt" ]; then
+  EXTRA="--da3_model_path=$ML/da3_stereo.pt"
 fi
 exec vve_cli "$@" $EXTRA
 EOF
