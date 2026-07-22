@@ -70,6 +70,7 @@ void getTorchModelDepthAnything3(torch::jit::script::Module& module, std::string
   setenv("PYTORCH_ENABLE_MPS_FALLBACK", "1", /*overwrite=*/0);
 #endif
 
+  const bool using_default_path = model_path.empty();
   if (model_path.empty()) {
 #if defined(_WIN32)
     const std::string default_model = "da3_stereo.pt";  // flat directory structure on windows
@@ -80,11 +81,40 @@ void getTorchModelDepthAnything3(torch::jit::script::Module& module, std::string
   }
   XPLINFO << "DA3 model_path: " << model_path;
 
+  // The DA3 module is ~518 MB and is not committed to git, so "file not found"
+  // is the single most likely first-run failure. Check for it explicitly: the
+  // alternative is a c10::Error stack trace from inside libtorch that gives the
+  // user no idea what to actually do about it.
+  {
+    std::ifstream probe(model_path, std::ios::binary);
+    if (!probe.good()) {
+      XCHECK(false)
+          << "\n\nDepth Anything 3 model not found:\n    " << model_path << "\n\n"
+          << (using_default_path
+                  ? "This file is ~518 MB and is not distributed in the git repo.\n"
+                    "Fetch it (from the repo root):\n"
+                    "    ./scripts/fetch_models.sh\n\n"
+                    "Or export it yourself:\n"
+                    "    python3 scripts/export_da3_torchscript.py\n"
+                    "    mv da3_stereo.pt ml_models/\n\n"
+                    "Or point at an existing copy:\n"
+                    "    --da3_model_path=/abs/path/to/da3_stereo.pt\n"
+                  : "The path came from --da3_model_path; check that it is correct.\n")
+          << "\nTo render without DA3, use --depth_method=raft (no extra model needed).\n";
+    }
+  }
+
   try {
     module = torch::jit::load(model_path);
     module.eval();
   } catch (const c10::Error& e) {
-    XCHECK(false) << "Error loading DA3 torch module: " << e.what() << "\n" << e.msg();
+    XCHECK(false)
+        << "\n\nFailed to load the DA3 TorchScript module:\n    " << model_path << "\n\n"
+        << "The file exists but libtorch could not read it. Most likely it was\n"
+        << "traced with a different torch version than this binary links against\n"
+        << "(see scripts/export_da3_torchscript.py - it must match libtorch),\n"
+        << "or the download was truncated. Re-fetch with scripts/fetch_models.sh.\n\n"
+        << "libtorch said: " << e.what() << "\n" << e.msg();
   }
 }
 

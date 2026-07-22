@@ -564,10 +564,18 @@ p11_cc_library(
     ":util_torch",
     "//external:eigen",
   ],
-  # NOTE: no data model dep yet, so the repo builds without the DA3 model file.
-  # After exporting ml_models/da3_stereo.pt, add it to ml_models/BUILD and here:
-  #   data = ["//ml_models:da3_stereo.pt"],
-  # Until then, DA3 modes need cfg.da3_model_path set to an absolute path.
+  # //ml_models:da3_stereo is a glob-backed filegroup, so it is empty (and the
+  # build still succeeds) when da3_stereo.pt has not been fetched yet. Once
+  # scripts/fetch_models.sh has run, the model lands in runfiles at
+  # ml_models/da3_stereo.pt - the default path depth_anything3.cc looks for -
+  # so --da3_model_path becomes optional.
+  # Windows uses a flat runfiles layout and would need a p11_windows_resource
+  # wrapper; DA3 is macOS/Linux-only for now.
+  data = select({
+      "@platforms//os:osx":   ["//ml_models:da3_stereo"],
+      "@platforms//os:linux": ["//ml_models:da3_stereo"],
+      "//conditions:default": [],
+  }),
 )
 
 p11_cc_library(
