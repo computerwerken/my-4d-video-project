@@ -14,6 +14,7 @@ import sys
 import cv2
 import numpy as np
 
+# usage: build_plates.py <frames_dir> [colour_out.png] [depth_out.png]
 frames_dir = sys.argv[1] if len(sys.argv) > 1 else '/workspace/nestt_plate'
 MAX = 121
 
@@ -54,6 +55,10 @@ def build(pattern, out, unchanged):
     print(f'  VERIFIED {out} {check.shape} {check.dtype} mean {round(float(check.mean()),1)}', flush=True)
 
 
-build('R_ftheta_[0-9]*.png', '/workspace/plate.png', unchanged=False)
-build('filtered_R_depth_[0-9]*.png', '/workspace/plate_depth.png', unchanged=True)
+# Output paths are overridable so callers do not have to inherit /workspace.
+colour_out = sys.argv[2] if len(sys.argv) > 2 else '/workspace/plate.png'
+depth_out = sys.argv[3] if len(sys.argv) > 3 else '/workspace/plate_depth.png'
+
+build('R_ftheta_[0-9]*.png', colour_out, unchanged=False)
+build('filtered_R_depth_[0-9]*.png', depth_out, unchanged=True)
 print('BUILD_PLATES_DONE', flush=True)
