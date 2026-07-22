@@ -57,7 +57,8 @@ WORKDIR /workspace
 RUN git lfs install && \
     git clone --branch jg-stereo-editor --depth 1 \
       https://github.com/computerwerken/my-4d-video-project.git repo && \
-    cd repo && git lfs pull
+    cd repo && git lfs pull && \
+    chmod +x lifecast_apps/scripts/*.sh
 
 # --- build the headless CLI ---------------------------------------------------
 WORKDIR /workspace/repo/lifecast_apps
@@ -80,7 +81,7 @@ set -e
 ML=/workspace/repo/lifecast_apps/ml_models
 EXTRA=""
 if [ -n "$DA3_MODEL_URL" ]; then
-  /workspace/repo/lifecast_apps/scripts/fetch_models.sh || exit 1
+  bash /workspace/repo/lifecast_apps/scripts/fetch_models.sh || exit 1
 fi
 # The runfiles tree was materialized at image-build time, so a model that
 # arrived later (fetched here, or bind-mounted) is not in it. Point at it
