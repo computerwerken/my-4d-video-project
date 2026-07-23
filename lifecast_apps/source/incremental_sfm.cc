@@ -20,6 +20,8 @@ bazel run -- //source:incremental_sfm \
 
 */
 
+#include <algorithm>
+
 #include "gflags/gflags.h"
 #include "third_party/json.h"
 #include "logger.h"
@@ -43,6 +45,14 @@ DEFINE_bool(intrinsic_prior, false, "Include prior residuals for intrinsics");
 DEFINE_double(inlier_frac, 0.8, "expected fraction of tracks that are inliers");
 DEFINE_double(depth_weight, 0.00001, "weight of mono depth residuals");
 DEFINE_int32(max_solver_itrs, 100, "max number of solver iterations for bundle adjustment");
+// jg stereo editor: headless fisheye SfM for the 3x R5C rig (see RIG_PIPELINE.md).
+// The fisheye template path already exists and is exercised by the 4dgstudio GUI
+// (CAMERA_TYPE_FISHEYE branch); these flags expose it headlessly.
+DEFINE_bool(fisheye, false, "Treat input frames as fisheye (equiangular) instead of rectilinear.");
+DEFINE_double(dist_a_to_b, 0.0,
+    "Enforced metric distance between the first two cameras (0 = auto scale). "
+    "For the R5C rig with frames ordered cam0L,cam0R,...: 0.060");
+DEFINE_int32(subsample, 10, "Use every Nth frame (1 = all frames; use 1 for a pre-built synced frame set).");
 
 
 namespace p11 { namespace calibration { namespace incremental_sfm {
@@ -68,7 +78,7 @@ void runIncrementalSfmSingleInputVideo(){
   int decode_type = CV_32FC3;
   MediaFrame frame;
   int frame_count = 0;
-  int subsample_frames = 10;
+  int subsample_frames = std::max(1, FLAGS_subsample);
   VideoStreamResult result;
   while((result = in_stream.readFrame(frame, decode_type)) == VideoStreamResult::OK) {
     if (!frame.is_video()) continue;
@@ -95,15 +105,7 @@ void runIncrementalSfmSingleInputVideo(){
     XCHECK_EQ(int(result), int(VideoStreamResult::ERR)) << "There was an error during transcoding.";
   }
 
-  RectilinearCamerad guess_intrinsics = calibration::guessRectilinearIntrinsics(w, h);
-  std::vector<RectilinearCamerad> initial_camera_intrinsics;
-  //std::vector<FisheyeCamerad> initial_camera_intrinsics;
-
-  for (int i = 0; i < images.size(); ++i) {
-    initial_camera_intrinsics.push_back(guess_intrinsics);
-  }
-
-  double dist_a_to_b = 0; // 0 means it will be scaled automatically
+  const double dist_a_to_b = FLAGS_dist_a_to_b; // 0 means it will be scaled automatically
   std::string debug_dir = FLAGS_dest_dir;
   float flow_err_threshold = 20.0;
   float match_ratio_threshold = 0.9;
@@ -111,29 +113,42 @@ void runIncrementalSfmSingleInputVideo(){
   std::vector<Eigen::Vector4f> sfm_point_cloud_colors;
 
   auto cancel_requested = std::make_shared<std::atomic<bool>>(false);
-  std::vector<RectilinearCamerad> sfm_cameras = incremental_sfm::estimateCameraPosesAndKeypoint3DWithIncrementalSfm(
-    cancel_requested,
-    nullptr, // gui data
-    images,
-    image_names,
-    initial_camera_intrinsics,
-    dist_a_to_b,
-    debug_dir,
-    FLAGS_show_keypoints,
-    FLAGS_show_matches,
-    flow_err_threshold,
-    match_ratio_threshold,
-    FLAGS_inlier_frac,
-    FLAGS_depth_weight,
-    FLAGS_time_window_size,
-    FLAGS_filter_with_flow,
-    FLAGS_share_intrinsics,
-    FLAGS_reorder,
-    FLAGS_intrinsic_prior,
-    FLAGS_max_solver_itrs,
-    sfm_point_cloud,
-    sfm_point_cloud_colors);
-  makeJsonSingleMovingCamera(sfm_cameras, FLAGS_dest_dir + "/dataset.json");
+
+  // One templated solve for either camera model, mirroring 4dgstudio.cc's
+  // CAMERA_TYPE_RECTILINEAR / CAMERA_TYPE_FISHEYE branches.
+  auto solve_and_save = [&](auto guess_intrinsics) {
+    using TCamera = decltype(guess_intrinsics);
+    std::vector<TCamera> initial_camera_intrinsics(images.size(), guess_intrinsics);
+    std::vector<TCamera> sfm_cameras = incremental_sfm::estimateCameraPosesAndKeypoint3DWithIncrementalSfm(
+      cancel_requested,
+      nullptr, // gui data
+      images,
+      image_names,
+      initial_camera_intrinsics,
+      dist_a_to_b,
+      debug_dir,
+      FLAGS_show_keypoints,
+      FLAGS_show_matches,
+      flow_err_threshold,
+      match_ratio_threshold,
+      FLAGS_inlier_frac,
+      FLAGS_depth_weight,
+      FLAGS_time_window_size,
+      FLAGS_filter_with_flow,
+      FLAGS_share_intrinsics,
+      FLAGS_reorder,
+      FLAGS_intrinsic_prior,
+      FLAGS_max_solver_itrs,
+      sfm_point_cloud,
+      sfm_point_cloud_colors);
+    makeJsonSingleMovingCamera(sfm_cameras, FLAGS_dest_dir + "/dataset.json");
+  };
+
+  if (FLAGS_fisheye) {
+    solve_and_save(calibration::guessGoProIntrinsics(w, h));
+  } else {
+    solve_and_save(calibration::guessRectilinearIntrinsics(w, h));
+  }
   
   // Convert the point-cloud from RGBA to RGB
   std::vector<Eigen::Vector3f> sfm_point_cloud_colors3f;
