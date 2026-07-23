@@ -12,11 +12,21 @@
 #   setsid bash /workspace/pod_build.sh > /workspace/pod_build.log 2>&1 & disown
 #   tail -f /workspace/pod_build.log      # or re-run `tail -40` as needed
 #
-# Env overrides: REPO=/path CUDA_ARCHS=compute_89
+# Env overrides:
+#   REPO=/path                     repo location (auto-detected otherwise)
+#   CUDA_ARCHS=compute_89          GPU arch
+#   BAZEL_OUTPUT_BASE=/workspace/bazel_out
+#       reuse a persisted bazel cache so the build is incremental instead of a
+#       ~45 min from-scratch rebuild. On a migrated RunPod box the container
+#       root (and its default ~/.cache/bazel) is wiped, but a cache on the
+#       /workspace volume survives - point at it here.
 set -uo pipefail
 
 log(){ echo "[$(date -u +%H:%M:%S)] $*"; }
 CUDA_ARCHS=${CUDA_ARCHS:-compute_89}     # 4090/L40S=89, A100=80, 3090=86
+BAZEL_OUTPUT_BASE=${BAZEL_OUTPUT_BASE:-}
+BAZEL_STARTUP=""
+[ -n "$BAZEL_OUTPUT_BASE" ] && BAZEL_STARTUP="--output_base=$BAZEL_OUTPUT_BASE"
 export USE_BAZEL_VERSION=7.2.0
 export DEBIAN_FRONTEND=noninteractive
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}:/usr/local/torch/lib
@@ -109,7 +119,9 @@ fi
 
 # --- 6. build -----------------------------------------------------------------
 log "=== bazel build //source:vve_cli (this is the real test of the WORKSPACE change) ==="
-if bazel build -c opt --cuda_archs="$CUDA_ARCHS" //source:vve_cli 2>&1 | tail -25; then
+[ -n "$BAZEL_STARTUP" ] && log "reusing bazel cache at $BAZEL_OUTPUT_BASE (incremental build)"
+# shellcheck disable=SC2086  # BAZEL_STARTUP is intentionally word-split (empty or one flag)
+if bazel $BAZEL_STARTUP build -c opt --cuda_archs="$CUDA_ARCHS" //source:vve_cli 2>&1 | tail -25; then
   BIN="$APP/bazel-bin/source/vve_cli"
   [ -x "$BIN" ] || { log "RESULT: FAIL - build reported ok but $BIN missing"; exit 1; }
   log "build ok: $BIN"
