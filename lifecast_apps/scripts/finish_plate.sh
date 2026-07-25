@@ -26,10 +26,28 @@ echo "frames=$N mid_mean=$MEAN"
 [ "$MEAN" -ge 1 ] || die "frames are black (mean $MEAN)"
 
 echo "=== H.264 encode ==="
-ffmpeg -y -framerate 30000/1001 -i "$OUT/ldi3_%06d.png" -c:v libx264 -preset medium \
-  -crf 12 -pix_fmt yuv444p -movflags +faststart /workspace/nestt1_1_ldi3_h264.mp4 \
-  >/workspace/encode.log 2>&1 || die "ffmpeg exit $?"
+# BT.709 full-range tags (see render_with_plate.sh for the why): untagged output
+# is what made playback look darker than the Premiere source.
+CTAG="-color_range pc -colorspace bt709 -color_primaries bt709 -color_trc bt709"
+XTAG="fullrange=1:colorprim=bt709:transfer=bt709:colormatrix=bt709"
+# scale=out_range=full forces a true full-range conversion; -color_range pc alone
+# only writes the tag while the pixels stay limited (16-235), which still plays
+# dark. See render_with_plate.sh for the verification.
+SCALE="-vf scale=in_range=full:out_range=full"
+
+# Archival / Blender master: 4:4:4, tagged full-range.
+ffmpeg -y -framerate 30000/1001 -i "$OUT/ldi3_%06d.png" $SCALE -c:v libx264 -preset medium \
+  -crf 12 -pix_fmt yuv444p $CTAG -x264-params "$XTAG" \
+  -movflags +faststart /workspace/nestt1_1_ldi3_h264.mp4 \
+  >/workspace/encode.log 2>&1 || die "ffmpeg (444 master) exit $?"
+
+# Web-ready: 4:2:0 (browsers only decode 4:2:0), tagged. Load THIS in the player.
+ffmpeg -y -framerate 30000/1001 -i "$OUT/ldi3_%06d.png" $SCALE -c:v libx264 -preset medium \
+  -crf 12 -pix_fmt yuv420p $CTAG -x264-params "$XTAG" \
+  -movflags +faststart /workspace/nestt1_1_ldi3_h264_web420.mp4 \
+  >/workspace/encode_web.log 2>&1 || die "ffmpeg (420 web) exit $?"
+
 cp "$OUT/jg4d_sidecar.json" /workspace/nestt1_1_jg4d_sidecar.json 2>/dev/null || true
-ls -lh /workspace/nestt1_1_ldi3_h264.mp4
+ls -lh /workspace/nestt1_1_ldi3_h264.mp4 /workspace/nestt1_1_ldi3_h264_web420.mp4
 touch /workspace/PLATE_RENDER_DONE
 echo ALL_DONE

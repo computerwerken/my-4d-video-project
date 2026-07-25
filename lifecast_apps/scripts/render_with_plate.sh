@@ -68,10 +68,41 @@ echo "frames=$N mid_frame_mean=$MEAN"
 if [ "${MEAN%%.*}" -lt 1 ]; then echo "ABORT: frames are black"; exit 1; fi
 
 echo "=== [5/5] H.264 encode ==="
-ffmpeg -y -framerate $FPS -i "$OUT/ldi3_%06d.png" -c:v libx264 -preset medium \
-  -crf 12 -pix_fmt yuv444p -movflags +faststart "$OUTFILE"
+# Colour tags: BT.709, FULL range. The ldi3 frames are full-range (0-255) sRGB
+# PNGs. Without these tags libx264 silently squeezes them into limited range
+# (16-235) and labels nothing, so every downstream player - including the
+# browser jg4dplayer and Blender - has to guess, and the result looks darker /
+# washed than the Premiere source. Tagging removes the guesswork; full range
+# also preserves the 12-bit depth packing better than the 16-235 squeeze.
+CTAG="-color_range pc -colorspace bt709 -color_primaries bt709 -color_trc bt709"
+XTAG="fullrange=1:colorprim=bt709:transfer=bt709:colormatrix=bt709"
+# scale=out_range=full forces a TRUE full-range RGB->YUV conversion. Without it,
+# -color_range pc only writes the *tag* while libx264 still encodes limited-range
+# (16-235) pixels - a tag/pixel mismatch that still plays dark. Verified: with
+# the filter, a 0..255 source round-trips to 0..255 (mean|diff| 0.00); tag alone
+# gives 16..235. The filter keeps frame size unchanged.
+SCALE="-vf scale=in_range=full:out_range=full"
+
+# 1) Archival / Blender master: 4:4:4 (max depth precision), now tagged full-range.
+ffmpeg -y -framerate $FPS -i "$OUT/ldi3_%06d.png" $SCALE -c:v libx264 -preset medium \
+  -crf 12 -pix_fmt yuv444p $CTAG -x264-params "$XTAG" \
+  -movflags +faststart "$OUTFILE"
+
+# 2) Web-ready: browsers only decode 4:2:0, never 4:4:4. Depth lives in the luma
+#    plane, which 4:2:0 keeps full-resolution, so the packed depth survives
+#    (toggle 12-bit off in the player if you see chroma speckle). THIS is the
+#    file to open in the jg4dplayer - no separate VideoToolbox transcode, so no
+#    second untagged encode to drift the colour.
+WEBFILE="${OUTFILE%.mp4}_web420.mp4"
+ffmpeg -y -framerate $FPS -i "$OUT/ldi3_%06d.png" $SCALE -c:v libx264 -preset medium \
+  -crf 12 -pix_fmt yuv420p $CTAG -x264-params "$XTAG" \
+  -movflags +faststart "$WEBFILE"
 T2=$(date +%s); echo "ENCODE_SEC=$((T2-T1))"
-cp "$OUT/jg4d_sidecar.json" "${OUTFILE%.mp4}_jg4d_sidecar.json" 2>/dev/null || true
-ls -lh "$OUTFILE"
+
+# Sidecar: name it after the stem before _ldi3 so the player auto-loads it
+# (nestt1_1_ldi3_h264*.mp4 -> nestt1_1_jg4d_sidecar.json).
+SBASE="$(basename "$OUTFILE")"; SSTEM="${SBASE%%_ldi3*}"; SDIR="$(dirname "$OUTFILE")"
+cp "$OUT/jg4d_sidecar.json" "$SDIR/${SSTEM}_jg4d_sidecar.json" 2>/dev/null || true
+ls -lh "$OUTFILE" "$WEBFILE"
 touch /workspace/PLATE_RENDER_DONE
 echo ALL_DONE
