@@ -119,7 +119,7 @@
       <span id="clipname" style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
     </div>
     <div class="row checks">
-      <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12"> 12-bit</label>
+      <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12" checked> 12-bit</label>
       <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
       <label title="Render at half resolution (faster on very large clips)"><input type="checkbox" id="halfres"> half-res</label>
       <label title="Match mesh tessellation to the depth map's true resolution (sharper geometry, more vertices)"><input type="checkbox" id="detail" checked> hi-mesh</label>
@@ -401,7 +401,7 @@ console.log("jg 4d demo v4 (mono, single clip on loop, calibration sidecar)");
 let renderer, camera, scene, quadCam;
 let probeRT = null, probeMat = null, probeScene = null;
 let debugGrid = false, debugScene = null, debugMat = null;
-let dirty = true, decode12 = false, halfRes = false;
+let dirty = true, decode12 = true, halfRes = false;
 let layerVisible = [true, true, true];
 let rangeFixOn = false, rangeProbed = false;
 let panelClosed = false;
