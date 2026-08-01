@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>jg 4d demo</title>
+<link rel="icon" href="jgcat_64.png">
+<link rel="apple-touch-icon" href="jgcat.png">
+<meta name="theme-color" content="#000000">
+<!--
+  jg 4d demo — fullscreen MONO (no anaglyph) single-clip LDI3 looper.
+  Same UI as jg 4d player; renders a single camera instead of a stereo pair.
+  Tuned for one clip on repeat: auto-loads ?src=... or ./clip.mp4 when served,
+  keeps exactly one video element alive, and only redraws on new decoded frames.
+
+  LDI3 decoding (mesh + shaders) adapted from Lifecast's open-source player
+  (MIT License, Copyright (c) 2021-2024 Lifecast Incorporated; see /web/lifecast_res).
+-->
+<style>
+  /* mavra.neocities.org-adjacent: monospace, black & white, win98 bevel chrome */
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden;
+               font-family:"Courier New", Courier, monospace; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+
+  /* ---- floating controls dialog ---- */
+  #hud {
+    position:fixed; top:18px; left:18px; width:272px;
+    background:#c0c0c0; color:#000; font-size:12px;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+    padding:3px; z-index:10; transition:opacity .4s;
+    user-select:none; -webkit-user-select:none;
+  }
+  #hud.hidden { opacity:0; pointer-events:none; }
+  #titlebar {
+    display:flex; align-items:center; gap:5px; height:20px; padding:1px 3px;
+    background:linear-gradient(90deg,#000080,#1084d0); color:#fff; font-weight:bold;
+  }
+  #titlebar img { width:16px; height:16px; image-rendering:pixelated; }
+  #ver { font-weight:normal; opacity:.75; }
+  .tspacer { flex:1; }
+  .tbtn {
+    width:18px; height:16px; padding:0; line-height:13px; text-align:center;
+    font-family:inherit; font-weight:bold; font-size:11px; color:#000;
+    background:#c0c0c0; border:none; cursor:pointer;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  }
+  .tbtn:active { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
+  #panelbody { padding:9px 7px 6px; display:flex; flex-direction:column; gap:9px; }
+  .row { display:flex; align-items:center; gap:7px; }
+  .btn {
+    font-family:inherit; font-size:12px; color:#000; padding:3px 12px; min-width:70px;
+    background:#c0c0c0; border:none; cursor:pointer;
+    box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff,
+                inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  }
+  .btn:active { box-shadow: inset 1px 1px #0a0a0a, inset -1px -1px #fff, inset 2px 2px #808080; }
+  .btn.nav { min-width:0; padding:3px 9px; }
+  .checks { flex-wrap:wrap; gap:5px 12px; }
+  .checks label { display:flex; align-items:center; gap:5px; cursor:pointer; }
+  input[type=checkbox] {
+    -webkit-appearance:none; appearance:none; width:13px; height:13px; margin:0; background:#fff;
+    box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a,
+                inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+    position:relative; cursor:pointer; flex:none;
+  }
+  input[type=checkbox]:checked::before {
+    content:"\2713"; position:absolute; top:-2px; left:1px;
+    font-size:12px; font-weight:bold; color:#000;
+  }
+  #statusbar {
+    padding:2px 5px; font-size:11px;
+    box-shadow: inset 1px 1px #808080, inset -1px -1px #fff;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+
+  /* ---- intro: ascii readme sheet ---- */
+  #hint {
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    background:#fff; color:#000; border:1px solid #000;
+    padding:16px 24px 14px; z-index:5; pointer-events:none; text-align:center;
+  }
+  #hint img { width:80px; height:80px; image-rendering:pixelated; margin-bottom:4px; }
+  #hint pre { margin:0; font-family:inherit; font-size:13px; line-height:1.3; text-align:left; }
+  #hint .tex { color:#999; }
+
+  #err { position:fixed; bottom:0; left:0; right:0; max-height:40%;
+         background:#fff; color:#000; border-top:1px solid #000; padding:8px 14px;
+         font-size:13px; line-height:1.5; z-index:20; white-space:pre-wrap; }
+  #err:empty { display:none; }
+  #err b { color:#c00; }
+  #drop.active::after {
+    content:"[ drop LDI3 files ]"; position:fixed; inset:14px;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(255,255,255,.85); border:2px dashed #000;
+    color:#000; font:bold 22px "Courier New", Courier, monospace; z-index:30;
+  }
+</style>
+</head>
+<body id="drop">
+<div id="app"></div>
+
+<div id="hud">
+  <div id="titlebar">
+    <img src="jgcat_64.png" alt="">
+    <span>jg 4d demo<span id="ver"> v4</span></span>
+    <span class="tspacer"></span>
+    <button class="tbtn" id="min_btn" title="collapse">_</button>
+    <button class="tbtn" id="fs_btn" title="fullscreen (F)">&#9633;</button>
+    <button class="tbtn" id="close_btn" title="hide controls (H to show)">&times;</button>
+  </div>
+  <div id="panelbody">
+    <div class="row">
+      <button class="btn" id="open_btn" title="Select one or more LDI3 clips">open...</button>
+      <button class="btn" id="play_btn" title="space">play</button>
+      <input type="file" id="file_input" multiple accept="video/*,.mp4,.mov,.webm,.m4v,.jpg,.jpeg,.png,.json" style="display:none">
+      <span id="clipname" style="flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
+    </div>
+    <div class="row checks">
+      <label title="Toggle 12-bit depth decoding"><input type="checkbox" id="bit12"> 12-bit</label>
+      <label title="Expand TV-range (limited) video levels — auto-detected"><input type="checkbox" id="tvfix"> tv-fix</label>
+      <label title="Render at half resolution (faster on very large clips)"><input type="checkbox" id="halfres"> half-res</label>
+      <label title="Match mesh tessellation to the depth map's true resolution (sharper geometry, more vertices)"><input type="checkbox" id="detail" checked> hi-mesh</label>
+    </div>
+    <div class="row" id="seekrow" style="display:none">
+      <input type="range" id="seek" min="0" max="1000" step="1" value="0"><span class="sval" id="time_val">0:00</span>
+    </div>
+    <div id="statusbar">no media — drop your LDI3 clip here</div>
+  </div>
+</div>
+
+<div id="hint">
+  <img src="jgcat.png" alt="">
+  <pre><span class="tex">  .       .   ~      .        .    ~     .       .   </span>
++======================================================+
+|                 j g   4 d   d e m o                  |
+|                single-clip LDI3 loop                 |
++======================================================+
+|                                                      |
+|   drop your LDI3 .mp4 anywhere on this page,         |
+|   or use [ open... ] in the controls                 |
+|                                                      |
+|   tip: a file named clip.mp4 next to this page       |
+|   loads and loops automatically, no clicking         |
+|                                                      |
++------------------------------------------------------+
+|   drag ......... look       space ..... play/pause   |
+|   w a s d q e .. move       f ......... fullscreen   |
+|   scroll ....... dolly      r ......... reset view   |
+|   1 2 3 ........ layers     m ......... mute         |
+|   g ............ raw grid   h ......... controls     |
++------------------------------------------------------+
+|    the clip loops forever; no anaglyph, mono view    |
++======================================================+
+<span class="tex">      .    ~       .       .      ~   .          .    </span></pre>
+</div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+
+// ============================== LDI3 shaders =================================
+// Adapted from Lifecast's LifecastVideoPlayerShaders11.js (MIT License,
+// Copyright (c) 2021 Lifecast Incorporated).
+const rangeFix = `
+uniform float uRangeFix;
+float fixv(float v) { return mix(v, clamp((v * 255.0 - 16.0) / 219.0, 0.0, 1.0), uRangeFix); }
+vec3 fixc(vec3 c)   { return mix(c, clamp((c * 255.0 - 16.0) / 219.0, 0.0, 1.0), uRangeFix); }
+`;
+
+const decode12bit = `
+float decodeInverseDepth(vec2 depth_uv_unscaled, vec2 cell_offset) {
+#if defined(DECODE_12BIT)
+  vec2 depth_uv_lo = cell_offset + (depth_uv_unscaled + vec2(0.0, 1.0)) * 0.33333333 * 0.5;
+  vec2 depth_uv_hi = cell_offset + (depth_uv_unscaled + vec2(1.0, 1.0)) * 0.33333333 * 0.5;
+  ivec2 texture_size = textureSize(uTexture, 0);
+  ivec2 texel_coord_lo = ivec2(vec2(texture_size) * depth_uv_lo);
+  ivec2 texel_coord_hi = ivec2(vec2(texture_size) * depth_uv_hi);
+  float ds_lo = fixv(texelFetch(uTexture, texel_coord_lo, 0).r);
+  float ds_hi = fixv(texelFetch(uTexture, texel_coord_hi, 0).r);
+  int lo = int(ds_lo * 255.0 + 0.5) & 255;
+  int hi = int(ds_hi * 255.0 + 0.5) & 255;
+  hi = hi / 16;
+  lo = (hi & 1) == 0 ? lo : 255 - lo;
+  int i12 = (lo & 255) | ((hi & 15) << 8);
+  float f12 = float(i12) / float((1 << 12) - 1);
+  return clamp(f12, 0.0001, 1.0);
+#else
+  vec2 depth_uv_8bit = cell_offset + depth_uv_unscaled * 0.33333;
+  ivec2 texture_size = textureSize(uTexture, 0);
+  ivec2 texel_coord = ivec2(vec2(texture_size) * depth_uv_8bit);
+  float v = fixv(texelFetch(uTexture, texel_coord, 0).r);
+  return clamp(v, 0.0001, 1.0);
+#endif
+}
+`;
+
+const fgVert = `
+precision highp float;
+uniform sampler2D uTexture;
+uniform float uInvDepthCoef;
+varying vec2 vUv;
+` + rangeFix + decode12bit + `
+void main() {
+  vUv = uv;
+#if defined(LAYER2)
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.66666666));
+#else
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.33333333));
+#endif
+  float s = clamp(uInvDepthCoef / depth_sample, 0.01, 50.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
+}
+`;
+
+const fgFrag = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+` + rangeFix + `
+void main() {
+#if defined(LAYER2)
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.66666);
+  vec2 texture_uv = vec2(vUv.s * 0.33333,           vUv.t * 0.33333 + 0.66666);
+#else
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333 + 0.33333);
+  vec2 texture_uv = vec2(vUv.s * 0.33333,           vUv.t * 0.33333 + 0.33333);
+#endif
+  vec3 rgb = fixc(texture2D(uTexture, texture_uv).rgb);
+  float a = fixv(texture2D(uTexture, alpha_uv).r);
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(rgb, a);
+}
+`;
+
+const bgVert = `
+precision highp float;
+uniform sampler2D uTexture;
+uniform float uInvDepthCoef;
+varying vec2 vUv;
+` + rangeFix + decode12bit + `
+void main() {
+  vUv = uv;
+  float depth_sample = decodeInverseDepth(vUv, vec2(0.33333333, 0.0));
+  float s = clamp(uInvDepthCoef / depth_sample, 0.01, 50.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xyz * s, 1.0);
+}
+`;
+
+const bgFrag = `
+precision highp float;
+uniform sampler2D uTexture;
+varying vec2 vUv;
+` + rangeFix + `
+void main() {
+  vec2 texture_uv = vec2(vUv.s * 0.33333, vUv.t * 0.33333);
+  vec2 alpha_uv   = vec2(vUv.s * 0.33333 + 0.66666, vUv.t * 0.33333);
+  float a = fixv(texture2D(uTexture, alpha_uv).r);
+  vec3 rgb = fixc(texture2D(uTexture, texture_uv).rgb);
+  if (a < 0.02) discard;
+  gl_FragColor = vec4(rgb, a);
+}
+`;
+
+const quadVert = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+
+// ============================== LDI3 mesh ====================================
+// Adapted from Lifecast's Ldi3Mesh.js (MIT License).
+const NUM_LAYERS = 3;
+// These two come from the VVE export's JSON sidecar. The values below are the
+// defaults (and happen to match nestt1_1's sidecar); a loaded sidecar overrides
+// them so a differently-tuned export still renders with correct geometry/depth.
+let fthetaScale = 1.15;   // sidecar: ftheta_scale (fisheye field-of-view scale)
+let invDepthCoef = 0.3;   // sidecar: inv_depth_coef (depth displacement scale)
+
+// Mesh tessellation, in quads per side per layer. Depth is sampled once per
+// VERTEX, so tessellation caps geometric detail regardless of depth quality.
+// In the "split12" LDI3 encoding the depth plane is HALF the colour resolution
+// (encodeDepthWithSplit12 downsamples invd to cols/2 before packing), so for a
+// 5760 grid each layer's depth is 960 across -> 960 quads matches it exactly.
+// The upstream default of 512 throws away about half of that detail.
+const MESH_QUADS_HI = 960;
+const MESH_QUADS_LO = 512;
+let meshQuads = MESH_QUADS_HI;
+
+class Ldi3Mesh extends THREE.Object3D {
+  constructor(decode_12bit, texture, rangeOn) {
+    super();
+    this.layer_to_meshes = Array.from({length: NUM_LAYERS}, () => []);
+    this.uniforms = { uTexture: { value: texture }, uRangeFix: { value: rangeOn ? 1.0 : 0.0 },
+                      uInvDepthCoef: { value: invDepthCoef } };
+    const prefix = decode_12bit ? "#define DECODE_12BIT\n" : "";
+
+    const mat0 = new THREE.ShaderMaterial({
+      vertexShader: prefix + bgVert, fragmentShader: prefix + bgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat0.side = THREE.BackSide; mat0.depthFunc = THREE.LessDepth;
+
+    const mat1 = new THREE.ShaderMaterial({
+      vertexShader: prefix + fgVert, fragmentShader: prefix + fgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat1.side = THREE.BackSide; mat1.depthFunc = THREE.LessEqualDepth;
+
+    const mat2 = new THREE.ShaderMaterial({
+      vertexShader: "#define LAYER2\n" + prefix + fgVert,
+      fragmentShader: "#define LAYER2\n" + prefix + fgFrag,
+      uniforms: this.uniforms, depthTest: true, depthWrite: true, transparent: true });
+    mat2.side = THREE.BackSide; mat2.depthFunc = THREE.LessEqualDepth;
+
+    this.materials = [mat0, mat1, mat2];
+    const inflation = 3.0;
+    // NUM_PATCHES=4 splits each layer into 16 buffers (keeps index counts sane);
+    // quads-per-side = GRID_SIZE * 4. Layer 2 is sparser, as upstream, since the
+    // top layer covers the least area.
+    const g  = Math.max(16, Math.round(meshQuads / 4));
+    const g2 = Math.max(16, Math.round(g * 0.75));
+    this.makeEquiangularMesh(mat0, g,  4, 0, inflation);
+    this.makeEquiangularMesh(mat1, g,  4, 1, inflation);
+    this.makeEquiangularMesh(mat2, g2, 4, 2, inflation);
+  }
+
+  // Builds into preallocated typed arrays. The original push()-based version
+  // (inherited from the reference player) is fine at 512 quads/side but stalls
+  // the main thread for tens of seconds at 960, where it appends ~17M values to
+  // plain JS arrays. Typed arrays keep the rebuild near-instant at any density.
+  makeEquiangularMesh(material, GRID_SIZE, NUM_PATCHES, order, ftheta_inflation) {
+    const NUM_QUADS_PER_SIDE = NUM_PATCHES * GRID_SIZE;
+    const MARGIN = 2;
+    const CULL_R2 = (NUM_QUADS_PER_SIDE + MARGIN) * (NUM_QUADS_PER_SIDE + MARGIN) / 4;
+    const VPS = GRID_SIZE + 1;                 // vertices per side, per patch
+    const HALF = NUM_QUADS_PER_SIDE / 2;
+    for (let patch_j = 0; patch_j < NUM_PATCHES; ++patch_j)
+    for (let patch_i = 0; patch_i < NUM_PATCHES; ++patch_i) {
+      // Skip whole patches that fall entirely outside the fisheye circle.
+      const cx = (patch_i + 0.5) * GRID_SIZE - HALF;
+      const cy = (patch_j + 0.5) * GRID_SIZE - HALF;
+      const patchR = GRID_SIZE * 0.7072;        // half-diagonal of the patch
+      if (Math.hypot(cx, cy) - patchR > Math.sqrt(CULL_R2)) continue;
+
+      const verts = new Float32Array(VPS * VPS * 3);
+      const uvs   = new Float32Array(VPS * VPS * 2);
+      let vi = 0, ui = 0;
+      for (let j = 0; j <= GRID_SIZE; ++j)
+      for (let i = 0; i <= GRID_SIZE; ++i) {
+        const ii = i + patch_i * GRID_SIZE, jj = j + patch_j * GRID_SIZE;
+        const u = ii / NUM_QUADS_PER_SIDE, v = jj / NUM_QUADS_PER_SIDE;
+        const a = 2.0 * (u - 0.5), b = 2.0 * (v - 0.5);
+        const theta = Math.atan2(b, a);
+        let r = Math.sqrt(a * a + b * b) / fthetaScale;
+        r = 0.5 * r + 0.5 * Math.pow(r, ftheta_inflation);
+        const phi = r * Math.PI / 2.0;
+        const sp = Math.sin(phi);
+        verts[vi++] = Math.cos(theta) * sp;
+        verts[vi++] = Math.sin(theta) * sp;
+        verts[vi++] = -Math.cos(phi);
+        uvs[ui++] = u; uvs[ui++] = v;
+      }
+
+      const idx = new Uint32Array(GRID_SIZE * GRID_SIZE * 6);
+      let n = 0;
+      for (let j = 0; j < GRID_SIZE; ++j)
+      for (let i = 0; i < GRID_SIZE; ++i) {
+        const di = i + patch_i * GRID_SIZE - HALF, dj = j + patch_j * GRID_SIZE - HALF;
+        if (di * di + dj * dj > CULL_R2) continue;
+        const a = i + VPS * j, b = a + 1, c = a + VPS, d = c + 1;
+        idx[n++] = a; idx[n++] = c; idx[n++] = b;
+        idx[n++] = c; idx[n++] = d; idx[n++] = b;
+      }
+      if (n > 0) {
+        const g = new THREE.BufferGeometry();
+        g.setIndex(new THREE.BufferAttribute(idx.subarray(0, n), 1));
+        g.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        const mesh = new THREE.Mesh(g, material);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = order;
+        this.layer_to_meshes[order].push(mesh);
+        this.add(mesh);
+      }
+    }
+  }
+
+  dispose() {
+    for (const layer of this.layer_to_meshes) for (const m of layer) m.geometry.dispose();
+    for (const m of this.materials) m.dispose();
+  }
+}
+
+// ============================== demo player ==================================
+const app = document.getElementById('app');
+const hud = document.getElementById('hud');
+const hint = document.getElementById('hint');
+const errDiv = document.getElementById('err');
+console.log("jg 4d demo v4 (mono, single clip on loop, calibration sidecar)");
+
+let renderer, camera, scene, quadCam;
+let probeRT = null, probeMat = null, probeScene = null;
+let debugGrid = false, debugScene = null, debugMat = null;
+let dirty = true, decode12 = false, halfRes = false;
+let layerVisible = [true, true, true];
+let rangeFixOn = false, rangeProbed = false;
+let panelClosed = false;
+
+// Single clip on repeat. Exactly ONE video element ever exists: large LDI3
+// clips are expensive to decode and a second one only steals bandwidth.
+let media = null;         // {video, texture, mesh, name, watchdog}
+let objectUrl = null;     // revoked when a new file is opened
+let loopCount = 0;
+let seeking = false;      // true while the scrub bar is being dragged
+
+function fmtTime(t) {
+  if (!isFinite(t)) return "0:00";
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+const rig = new THREE.Group();
+let yaw = 0, pitch = 0;
+const keys = new Set();
+
+function setError(html) { errDiv.innerHTML = html || ""; }
+function setStatus(msg) { document.getElementById('statusbar').textContent = msg; }
+
+function init() {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.autoClear = false;
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  app.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  scene.add(rig);
+
+  camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 110);
+  rig.add(camera);
+  quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  window.addEventListener('resize', onResize);
+  renderer.setAnimationLoop(frame);
+}
+
+function onResize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  dirty = true;
+}
+
+function applyResolution() {
+  // half-res simply lowers the device pixel ratio; the browser upscales.
+  renderer.setPixelRatio(window.devicePixelRatio * (halfRes ? 0.5 : 1));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  dirty = true;
+}
+
+function setRangeFix(on) {
+  rangeFixOn = on;
+  document.getElementById('tvfix').checked = on;
+  if (media && media.mesh) media.mesh.uniforms.uRangeFix.value = on ? 1.0 : 0.0;
+  dirty = true;
+}
+
+// Measure what the video texture actually delivers to WebGL: layer 0's alpha
+// cell is mostly white, so a white median near 235 means unexpanded TV range.
+function probeVideoRangeGL() {
+  if (!media || !media.texture) return;
+  if (!probeRT) {
+    probeRT = new THREE.WebGLRenderTarget(32, 32, { depthBuffer: false });
+    probeMat = new THREE.ShaderMaterial({
+      vertexShader: quadVert,
+      fragmentShader: `precision highp float; uniform sampler2D uTex; varying vec2 vUv;
+        void main() { gl_FragColor = texture2D(uTex, vec2(0.66666 + vUv.x * 0.33333, vUv.y * 0.33333)); }`,
+      uniforms: { uTex: { value: null } }, depthTest: false, depthWrite: false });
+    probeScene = new THREE.Scene();
+    probeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), probeMat));
+  }
+  probeMat.uniforms.uTex.value = media.texture;
+  renderer.setRenderTarget(probeRT);
+  renderer.clear(true, false, false);
+  renderer.render(probeScene, quadCam);
+  const buf = new Uint8Array(32 * 32 * 4);
+  renderer.readRenderTargetPixels(probeRT, 0, 0, 32, 32, buf);
+  renderer.setRenderTarget(null);
+  const bright = [];
+  for (let i = 0; i < buf.length; i += 4) if (buf[i] > 180) bright.push(buf[i]);
+  if (bright.length < 50) return;
+  bright.sort((a, b) => a - b);
+  const med = bright[bright.length >> 1];
+  rangeProbed = true;
+  setRangeFix(med < 245);
+  console.log("jg4d range probe: white median =", med, "-> tv-fix", med < 245);
+}
+
+// ============================== media ========================================
+function configureTexture(t) {
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+}
+
+function disposeMedia() {
+  if (!media) return;
+  clearTimeout(media.watchdog);
+  if (media.mesh) { scene.remove(media.mesh); media.mesh.dispose(); }
+  if (media.texture) media.texture.dispose();
+  if (media.video) {
+    media.video.pause();
+    media.video.removeAttribute('src');
+    media.video.load();
+    media.video.remove();
+  }
+  media = null;
+}
+
+// Tailored advice: .mov failures are almost always ProRes; .mp4 failures on a
+// big LDI3 export are almost always HEVC exceeding the hardware decoder.
+function codecHelp(name) {
+  const isMov = /\.mov(\?|$)/i.test(name);
+  if (isMov) {
+    return '<b>This file will not play in a browser.</b>\n' +
+      'Most likely it is ProRes (common for .mov exports) - browsers cannot decode ProRes at all.\n' +
+      'Convert to H.264 .mp4 first:\n' +
+      '    ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -an clip.mp4';
+  }
+  return '<b>This file will not play in this browser.</b>\n' +
+    'If it is HEVC/H.265: Chrome can only decode HEVC in hardware, and a very large frame\n' +
+    '(e.g. 5760x5760) can exceed what the hardware decoder accepts, so it silently fails.\n' +
+    'Two fixes, either works:\n' +
+    '  1. Try Safari, which is more permissive with HEVC.\n' +
+    '  2. Re-encode to H.264, which Chrome decodes in software at any size:\n' +
+    '     ffmpeg -i "' + name + '" -c:v libx264 -crf 18 -pix_fmt yuv420p -an clip.mp4';
+}
+
+function showMedia(url, name) {
+  const item = { url, name, isPhoto: /\.(jpe?g|png)(\?|$)/i.test(name) };
+  setError("");
+  disposeMedia();
+  hint.style.display = "none";
+  rangeProbed = false;
+  loopCount = 0;
+
+  media = { video: null, texture: null, mesh: null, name: item.name, watchdog: null };
+
+  if (item.isPhoto) {
+    media.texture = new THREE.TextureLoader().setCrossOrigin('anonymous').load(item.url,
+      () => { dirty = true; },
+      undefined,
+      () => setError("<b>cannot load image:</b> " + item.name));
+    configureTexture(media.texture);
+    setRangeFix(false);
+    rangeProbed = true;
+  } else {
+    const v = document.createElement('video');
+    v.setAttribute('crossorigin', 'anonymous');
+    v.setAttribute('playsinline', '');
+    v.loop = true;      // each clip loops until you advance
+    v.muted = true;     // required for autoplay; M unmutes
+    v.preload = "auto";
+    v.style.display = "none";
+    v.src = item.url;
+    document.body.appendChild(v);
+    media.video = v;
+
+    v.addEventListener('error', () => {
+      const code = v.error ? v.error.code : 0;
+      setError(code === 4
+        ? codecHelp(item.name) + '\n\nfile: ' + item.name
+        : '<b>cannot load:</b> ' + item.name + ' (media error ' + code + ')');
+    });
+
+    v.addEventListener('loadedmetadata', () => {
+      // LDI3 is a 3x3 grid, so the frame must be square. Anything else is a
+      // regular video and will render as garbage through the LDI3 shaders.
+      if (v.videoWidth !== v.videoHeight) {
+        setError('<b>not an LDI3 clip:</b> ' + item.name + ' is ' + v.videoWidth + 'x' +
+                 v.videoHeight + '.\nLDI3 exports are square (e.g. 5760x5760). ' +
+                 'This looks like a normal video, not a Volumetric Video Editor LDI3 export.');
+      }
+      updateClipUI();
+      dirty = true;
+    });
+
+    // Loop counter + seek bar. Detect the wrap by time going backwards (with
+    // loop=true the 'ended' event never fires), and ignore it while scrubbing.
+    let prevT = 0;
+    v.addEventListener('timeupdate', () => {
+      if (!seeking && v.currentTime < prevT - 1.0) { loopCount++; updateClipUI(); }
+      prevT = v.currentTime;
+      if (!seeking && isFinite(v.duration) && v.duration > 0) {
+        document.getElementById('seek').value = Math.round(1000 * v.currentTime / v.duration);
+      }
+      document.getElementById('time_val').textContent = fmtTime(v.currentTime);
+    });
+    v.addEventListener('loadeddata', () => {
+      document.getElementById('seekrow').style.display = isFinite(v.duration) ? '' : 'none';
+    });
+
+    // If nothing has decoded after a while, say so instead of showing black.
+    media.watchdog = setTimeout(() => {
+      if (media && media.video === v && v.readyState === 0 && !errDiv.innerHTML) {
+        setError(codecHelp(item.name) + '\n\nfile: ' + item.name + '  (no frames decoded after 8s)');
+      }
+    }, 8000);
+
+    media.texture = new THREE.VideoTexture(v);
+    configureTexture(media.texture);
+
+    if ('requestVideoFrameCallback' in v) {
+      const onFrame = () => {
+        if (!media || media.video !== v) return;
+        media.texture.needsUpdate = true;
+        dirty = true;
+        if (!rangeProbed && v.readyState >= 2) probeVideoRangeGL();
+        v.requestVideoFrameCallback(onFrame);
+      };
+      v.requestVideoFrameCallback(onFrame);
+    }
+    v.play().catch(() => { /* needs a gesture; the play button covers it */ });
+  }
+
+  media.mesh = new Ldi3Mesh(decode12, media.texture, rangeFixOn);
+  scene.add(media.mesh);
+  updateClipUI();
+  dirty = true;
+  maybeFetchSidecar(url); // async; applies + rebuilds if a sidecar is found
+}
+
+// ---- calibration sidecar ------------------------------------------------
+// A VVE export can ship a JSON sidecar of geometry/depth constants. Applying it
+// keeps the render correct even if a future export is tuned differently.
+// Recognized keys: ftheta_scale, inv_depth_coef, decode_12bit.
+function applySidecar(sc, label) {
+  if (!sc || typeof sc !== 'object') return;
+  const changed = [];
+  if (typeof sc.ftheta_scale === 'number')  { fthetaScale = sc.ftheta_scale;  changed.push('ftheta_scale=' + fthetaScale); }
+  if (typeof sc.inv_depth_coef === 'number'){ invDepthCoef = sc.inv_depth_coef; changed.push('inv_depth_coef=' + invDepthCoef); }
+  if (typeof sc.decode_12bit === 'boolean') { decode12 = sc.decode_12bit; document.getElementById('bit12').checked = decode12; changed.push('12bit=' + decode12); }
+  console.log('jg4d sidecar' + (label ? ' [' + label + ']' : '') + ':', changed.join('  ') || '(no recognized keys)');
+  if (media && media.texture) rebuildMesh(); // re-apply to the clip already showing
+}
+
+// When served over http(s), look for a sidecar next to the clip. Tries, in order:
+//   ?sidecar=NAME  ·  <clipstem>.json  ·  <prefix-before-_ldi3>_jg4d_sidecar.json
+async function maybeFetchSidecar(url) {
+  if (!/^https?:/i.test(url)) return;   // blob:/file: can't resolve neighbours
+  const noQ = url.split('?')[0];
+  const dir = noQ.slice(0, noQ.lastIndexOf('/') + 1);
+  const stem = noQ.slice(noQ.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+  const cands = [];
+  const q = new URLSearchParams(location.search).get('sidecar');
+  if (q) cands.push(new URL(q, location.href).href);
+  cands.push(dir + stem + '.json');
+  const pre = stem.replace(/_ldi3.*$/i, '');
+  if (pre && pre !== stem) cands.push(dir + pre + '_jg4d_sidecar.json');
+  for (const c of cands) {
+    try {
+      const r = await fetch(c);
+      if (r.ok) { applySidecar(await r.json(), c.slice(c.lastIndexOf('/') + 1)); return; }
+    } catch (_) { /* try next candidate */ }
+  }
+}
+
+// Open one or more local Files (drag-drop or the open... button). A .json is
+// treated as a sidecar; the first non-json is the clip. Sidecar is applied
+// first so the clip's mesh is built with the right parameters.
+async function loadFiles(list) {
+  const files = Array.from(list);
+  const jsonF  = files.find(f => /\.json$/i.test(f.name));
+  const mediaF = files.find(f => !/\.json$/i.test(f.name));
+  if (jsonF) {
+    try { applySidecar(JSON.parse(await jsonF.text()), jsonF.name); }
+    catch (_) { setError('<b>bad sidecar JSON:</b> ' + jsonF.name); }
+  }
+  if (mediaF) loadFile(mediaF);
+  else if (jsonF && media && media.texture) rebuildMesh();
+}
+
+function loadFile(file) {
+  if (!file) return;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  showMedia(objectUrl, file.name);
+}
+
+function updateClipUI() {
+  if (!media) return;
+  document.getElementById('clipname').textContent = media.name;
+  const v = media.video;
+  let info = media.name;
+  if (v && v.videoWidth) info += "  " + v.videoWidth + "x" + v.videoHeight;
+  if (v && v.duration && isFinite(v.duration)) info += "  " + v.duration.toFixed(1) + "s";
+  if (loopCount > 0) info += "  loop " + loopCount;
+  setStatus(info);
+  updatePlayBtn();
+}
+
+function togglePlay() {
+  const v = media && media.video;
+  if (!v) return;
+  if (v.paused || v.ended) v.play(); else v.pause();
+  setTimeout(updatePlayBtn, 50);
+}
+function updatePlayBtn() {
+  const b = document.getElementById('play_btn');
+  const v = media && media.video;
+  b.style.display = v ? "" : "none";
+  if (v) b.textContent = (v.paused || v.ended) ? "play" : "pause";
+}
+
+function rebuildMesh() {
+  if (!media || !media.texture) return;
+  if (media.mesh) { scene.remove(media.mesh); media.mesh.dispose(); }
+  media.mesh = new Ldi3Mesh(decode12, media.texture, rangeFixOn);
+  scene.add(media.mesh);
+  dirty = true;
+}
+
+// ============================== frame loop ====================================
+let lastT = performance.now();
+function frame() {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastT) / 1000);
+  lastT = now;
+
+  if (keys.size > 0 && media) {
+    const speed = (keys.has('shift') ? 4.5 : 1.5) * dt;
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    if (keys.has('w')) rig.position.addScaledVector(fwd, speed);
+    if (keys.has('s')) rig.position.addScaledVector(fwd, -speed);
+    if (keys.has('a')) rig.position.addScaledVector(right, -speed);
+    if (keys.has('d')) rig.position.addScaledVector(right, speed);
+    if (keys.has('q')) rig.position.y -= speed;
+    if (keys.has('e')) rig.position.y += speed;
+    dirty = true;
+  }
+
+  // Safari fallback (no requestVideoFrameCallback)
+  const v = media && media.video;
+  if (v && !('requestVideoFrameCallback' in v) && !v.paused && v.readyState >= 2) {
+    media.texture.needsUpdate = true; dirty = true;
+    if (!rangeProbed) probeVideoRangeGL();
+  }
+
+  if (!dirty || !media || !media.mesh) return;
+  dirty = false;
+
+  rig.rotation.set(0, 0, 0);
+  rig.rotateY(yaw);
+  rig.rotateX(pitch);
+
+  if (debugGrid) {
+    if (!debugScene) {
+      debugMat = new THREE.ShaderMaterial({
+        vertexShader: quadVert,
+        fragmentShader: `precision highp float; uniform sampler2D uTex; varying vec2 vUv;
+          void main() { gl_FragColor = vec4(texture2D(uTex, vUv).rgb, 1.0); }`,
+        uniforms: { uTex: { value: null } }, depthTest: false, depthWrite: false });
+      debugScene = new THREE.Scene();
+      debugScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), debugMat));
+    }
+    debugMat.uniforms.uTex.value = media.texture;
+    renderer.setRenderTarget(null);
+    renderer.clear(true, true, false);
+    renderer.render(debugScene, quadCam);
+    return;
+  }
+
+  // All three layers in ONE render call, ordered by renderOrder.
+  renderer.setRenderTarget(null);
+  renderer.clear(true, true, false);
+  for (let k = 0; k < NUM_LAYERS; ++k)
+    for (const m of media.mesh.layer_to_meshes[k]) m.visible = layerVisible[k];
+  renderer.render(scene, camera);
+}
+
+// ============================== input ========================================
+init();
+
+let dragging = false;
+app.addEventListener('mousedown', e => { if (e.button === 0) dragging = true; });
+window.addEventListener('mouseup', e => { if (e.button === 0) dragging = false; });
+window.addEventListener('mousemove', e => {
+  showHud();
+  if (!dragging) return;
+  yaw -= e.movementX * 0.0022;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0022));
+  dirty = true;
+});
+app.addEventListener('wheel', e => {
+  e.preventDefault();
+  const fwd = new THREE.Vector3(
+    -Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
+  rig.position.addScaledVector(fwd, -e.deltaY * 0.002);
+  dirty = true;
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (["w","a","s","d","q","e","shift"].includes(k)) { keys.add(k); return; }
+  if (k === " ") { e.preventDefault(); togglePlay(); }
+  else if (k === "o") document.getElementById('file_input').click();
+  else if (k === "f") toggleFullscreen();
+  else if (k === "r") { rig.position.set(0,0,0); yaw = 0; pitch = 0; dirty = true; }
+  else if (k === "m") { const vv = media && media.video; if (vv) vv.muted = !vv.muted; }
+  else if (k === "g") { debugGrid = !debugGrid; dirty = true; }
+  else if (k === "h") {
+    panelClosed = !panelClosed;
+    hud.classList.toggle('hidden', panelClosed);
+    if (!panelClosed) showHud();
+  }
+  else if (k === "1" || k === "2" || k === "3") {
+    const l = parseInt(k) - 1; layerVisible[l] = !layerVisible[l]; dirty = true;
+  }
+});
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+}
+
+// HUD auto-hide
+let hudTimer;
+function showHud() {
+  if (!panelClosed) hud.classList.remove('hidden');
+  app.style.cursor = '';
+  clearTimeout(hudTimer);
+  hudTimer = setTimeout(() => {
+    hud.classList.add('hidden');
+    app.style.cursor = 'none';
+  }, 3000);
+}
+showHud();
+
+// ---- dialog window behavior: drag, collapse, close ----
+const titlebar = document.getElementById('titlebar');
+let panelDrag = null;
+titlebar.addEventListener('mousedown', e => {
+  if (e.target.closest('.tbtn')) return;
+  const r = hud.getBoundingClientRect();
+  panelDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+  e.preventDefault();
+});
+window.addEventListener('mousemove', e => {
+  if (!panelDrag) return;
+  const r = hud.getBoundingClientRect();
+  hud.style.left = Math.max(0, Math.min(window.innerWidth - r.width, e.clientX - panelDrag.dx)) + 'px';
+  hud.style.top  = Math.max(0, Math.min(window.innerHeight - 24, e.clientY - panelDrag.dy)) + 'px';
+});
+window.addEventListener('mouseup', () => { panelDrag = null; });
+document.getElementById('min_btn').onclick = () => {
+  const b = document.getElementById('panelbody');
+  b.style.display = b.style.display === 'none' ? '' : 'none';
+};
+document.getElementById('close_btn').onclick = () => {
+  panelClosed = true; hud.classList.add('hidden');
+};
+
+// HUD controls
+document.getElementById('open_btn').onclick = () => document.getElementById('file_input').click();
+document.getElementById('file_input').addEventListener('change', e => {
+  if (e.target.files.length) loadFiles(e.target.files);
+});
+document.getElementById('play_btn').onclick = togglePlay;
+document.getElementById('fs_btn').onclick = toggleFullscreen;
+document.getElementById('bit12').addEventListener('change', e => {
+  decode12 = e.target.checked; rebuildMesh();
+});
+document.getElementById('tvfix').addEventListener('change', e => {
+  rangeProbed = true; setRangeFix(e.target.checked);
+});
+document.getElementById('halfres').addEventListener('change', e => {
+  halfRes = e.target.checked; applyResolution();
+});
+document.getElementById('detail').addEventListener('change', e => {
+  meshQuads = e.target.checked ? MESH_QUADS_HI : MESH_QUADS_LO;
+  rebuildMesh();
+});
+
+// Scrub bar (matters once the clip is movie-length rather than a 25s loop)
+const seekEl = document.getElementById('seek');
+seekEl.addEventListener('pointerdown', () => { seeking = true; });
+window.addEventListener('pointerup',   () => { seeking = false; });
+seekEl.addEventListener('input', e => {
+  const v = media && media.video;
+  if (v && isFinite(v.duration) && v.duration > 0) {
+    v.currentTime = (e.target.value / 1000) * v.duration;
+    dirty = true;
+  }
+});
+
+// Drag & drop (accepts a whole batch of clips)
+const dropEl = document.getElementById('drop');
+window.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('active'); });
+window.addEventListener('dragleave', e => { if (e.relatedTarget === null) dropEl.classList.remove('active'); });
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  dropEl.classList.remove('active');
+  if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
+});
+
+// ---- auto-load ----------------------------------------------------------
+// ?src=whatever.mp4 wins; otherwise, if this page is being served over http
+// and a file named clip.mp4 sits next to it, load that with no interaction.
+// (file:// can't probe for neighbours, so there we just wait for a drop.)
+(async () => {
+  const src = new URLSearchParams(window.location.search).get('src');
+  if (src) { showMedia(src, src.split('/').pop()); return; }
+  if (location.protocol === 'file:') return;
+  try {
+    const r = await fetch('clip.mp4', { method: 'HEAD' });
+    if (r.ok) showMedia('clip.mp4', 'clip.mp4');
+  } catch (_) { /* no neighbour file; stay on the intro sheet */ }
+})();
+</script>
+</body>
+</html>
