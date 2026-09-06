@@ -1,5 +1,8 @@
 // MIT License. Copyright (c) 2025 Lifecast Incorporated. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include "ldi_pipeline_lib.h"
 #include "depth_anything3.h"
 #include "turbojpeg_wrapper.h"
@@ -43,6 +46,55 @@ struct ImageCache {
     }
   }
 };
+
+// External stereo backend: hand the rectified pair to a sidecar process through the
+// filesystem and block until it answers. Files are written under a temp name and renamed,
+// so neither side ever reads a partial PNG. Protocol (all in <dest_dir>/xstereo):
+//   vve writes    xs_L_NNNNNN.png, xs_R_NNNNNN.png  (8-bit BGR rectified)
+//   daemon writes xs_D_NNNNNN.png                   (uint16 right-referenced disparity,
+//                                                    pixels * cfg.external_disparity_scale)
+//   vve removes xs_D after reading; the daemon removes xs_L/xs_R after processing.
+// Reference daemon: scripts/ffs_daemon.py (Fast-FoundationStereo).
+static cv::Mat computeDisparityExternal(
+    const LdiPipelineConfig& cfg,
+    const cv::Mat& L_rectified,
+    const cv::Mat& R_rectified,
+    const int frame_index)
+{
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(cfg.dest_dir) / "xstereo";
+  fs::create_directories(dir);
+  const std::string fnum = string::intToZeroPad(frame_index, 6);
+  const fs::path L_path = dir / ("xs_L_" + fnum + ".png");
+  const fs::path R_path = dir / ("xs_R_" + fnum + ".png");
+  const fs::path D_path = dir / ("xs_D_" + fnum + ".png");
+
+  auto writeAtomic = [](const fs::path& p, const cv::Mat& m) {
+    const fs::path tmp = p.string() + ".tmp.png";
+    XCHECK(cv::imwrite(tmp.string(), m)) << tmp;
+    fs::rename(tmp, p);
+  };
+  writeAtomic(L_path, L_rectified);
+  writeAtomic(R_path, R_rectified);
+
+  const fs::path E_path = dir / ("xs_E_" + fnum + ".txt");
+  const auto t0 = time::now();
+  while (!fs::exists(D_path)) {
+    XCHECK(!fs::exists(E_path)) << "external stereo backend reported an error, see " << E_path;
+    XCHECK(time::timeSinceSec(t0) < cfg.external_timeout_sec)
+        << "external stereo backend: timed out waiting for " << D_path
+        << " (is scripts/ffs_daemon.py running on " << dir << " ?)";
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  cv::Mat d16 = cv::imread(D_path.string(), cv::IMREAD_UNCHANGED);
+  XCHECK(!d16.empty() && d16.type() == CV_16U) << "bad external disparity: " << D_path;
+  XCHECK(d16.size() == R_rectified.size()) << "external disparity size mismatch: " << D_path;
+  fs::remove(D_path);
+
+  cv::Mat disparity;
+  d16.convertTo(disparity, CV_32F, 1.0 / cfg.external_disparity_scale);
+  return disparity;
+}
 
 struct VR180DepthProcessor {
   // Lookup tables for warping from VR180 projection to ftheta projection
@@ -93,7 +145,13 @@ struct VR180DepthProcessor {
     // Prevent torch from trying to optimize the disparity model (this actually wastes more time
     // than it saves here).
     torch::jit::getProfilingMode() = false;
-    optical_flow::getTorchModelRAFT(raft_module, /*model_path=*/"");
+    if (cfg.stereo_backend == "external") {
+      XPLINFO << "stereo_backend=external: RAFT not loaded; expecting a daemon on "
+              << cfg.dest_dir << "/xstereo";
+    } else {
+      XCHECK(cfg.stereo_backend == "raft") << "unknown stereo_backend: " << cfg.stereo_backend;
+      optical_flow::getTorchModelRAFT(raft_module, /*model_path=*/"");
+    }
     if (cfg.depth_method == "da3_fused" || cfg.depth_method == "da3_only") {
       depth_estimation::getTorchModelDepthAnything3(da3_module, cfg.da3_model_path);
     }
@@ -119,7 +177,9 @@ struct VR180DepthProcessor {
 
     // Compute disparity in rectified projection
     auto disparity_start_timer = time::now();
-    cv::Mat R_disparity = optical_flow::computeDisparityRAFT(raft_module, R_rectified, L_rectified);
+    cv::Mat R_disparity = cfg.stereo_backend == "external"
+        ? computeDisparityExternal(cfg, L_rectified, R_rectified, frame_index)
+        : optical_flow::computeDisparityRAFT(raft_module, R_rectified, L_rectified);
     XPLINFO << "depth time(sec):\t" << time::timeSinceSec(disparity_start_timer);
 
     cv::Mat R_inv_depth_rectified = projection::disparityToInvDepth(R_disparity, cfg.baseline_m);
