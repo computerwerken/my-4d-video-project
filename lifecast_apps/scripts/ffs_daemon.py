@@ -34,7 +34,10 @@ def main():
     ap.add_argument('--ffs_root', default='/workspace/ffs', help='Fast-FoundationStereo checkout')
     ap.add_argument('--model', default='/workspace/ffs/weights/23-36-37/model_best_bp2_serialize.pth')
     ap.add_argument('--valid_iters', type=int, default=8)
-    ap.add_argument('--max_disp', type=int, default=416)
+    ap.add_argument('--max_disp', type=int, default=640,
+                    help='cost-volume search range in px at the rectified size. 640 covers the '
+                         'close foreground seen at rectified 1536 (measured peaks ~505 px); '
+                         'raising it widens the volume, so cost grows roughly linearly.')
     ap.add_argument('--hiera', type=int, default=0, help='hierarchical inference (for >1K inputs)')
     ap.add_argument('--low_memory', type=int, default=0, help='chunked cost-volume lookup; auto-enabled on cuDNN failure (needed >= ~2K)')
     ap.add_argument('--scale', type=float, default=32.0, help='uint16 = disparity_px * scale (must match vve_cli --external_disparity_scale)')
