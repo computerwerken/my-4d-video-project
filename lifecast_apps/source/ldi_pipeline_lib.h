@@ -66,10 +66,23 @@ struct LdiPipelineConfig {
   double da3_blend = 0.6;
   // Optional override path for the DA3 TorchScript model.
   std::string da3_model_path;
+
+  // Stereo disparity backend for the video depth phase:
+  //   "raft"     built-in TorchScript RAFT (original behaviour)
+  //   "external" rectified L/R pairs are written to <dest_dir>/xstereo and an external
+  //              process (scripts/ffs_daemon.py = Fast-FoundationStereo) writes back a
+  //              16-bit right-referenced disparity PNG. DA3 fusion (depth_method) still
+  //              applies on top, unchanged.
+  std::string stereo_backend = "raft";
+  // uint16 disparity PNG = pixels * external_disparity_scale (max 2047 px at 32).
+  double external_disparity_scale = 32.0;
+  // Per-frame wait before giving up on the external process (first frame includes
+  // model load + kernel compile).
+  double external_timeout_sec = 900.0;
 };
 
 inline void printConfig(const LdiPipelineConfig& cfg) {
-  XPLINFO << "cancel_requested=" << cfg.cancel_requested;
+    XPLINFO << "cancel_requested=" << cfg.cancel_requested;
   XPLINFO << "cwd=" << cfg.cwd;
   XPLINFO << "src_vr180=" << cfg.src_vr180;
   XPLINFO << "src_ftheta_image=" << cfg.src_ftheta_image;
@@ -80,6 +93,7 @@ inline void printConfig(const LdiPipelineConfig& cfg) {
   XPLINFO << "ftheta_size=" << cfg.ftheta_size;
   XPLINFO << "inflated_ftheta_size=" << cfg.inflated_ftheta_size;
   XPLINFO << "rectified_size_for_depth=" << cfg.rectified_size_for_depth;
+  XPLINFO << "stereo_backend=" << cfg.stereo_backend;
   XPLINFO << "disparity_bias=" << cfg.disparity_bias;
   XPLINFO << "baseline_m=" << cfg.baseline_m;
   XPLINFO << "inv_depth_coef=" << cfg.inv_depth_coef;
@@ -121,7 +135,7 @@ void accumulateWeightedSum(
     cv::Mat& accumulator,
     cv::Mat& sum_weight)
 {
-  XCHECK_EQ(accumulator.size(), nei_image.size());
+    XCHECK_EQ(accumulator.size(), nei_image.size());
   XCHECK_EQ(accumulator.size(), sum_weight.size());
   if (std::is_same<TImage, cv::Vec3b>::value) XCHECK_EQ(nei_image.type(), CV_8UC3);
   if (std::is_same<TImage, float>::value) XCHECK_EQ(nei_image.type(), CV_32FC1);
