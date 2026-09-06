@@ -82,7 +82,7 @@ struct LdiPipelineConfig {
 };
 
 inline void printConfig(const LdiPipelineConfig& cfg) {
-    XPLINFO << "cancel_requested=" << cfg.cancel_requested;
+  XPLINFO << "cancel_requested=" << cfg.cancel_requested;
   XPLINFO << "cwd=" << cfg.cwd;
   XPLINFO << "src_vr180=" << cfg.src_vr180;
   XPLINFO << "src_ftheta_image=" << cfg.src_ftheta_image;
@@ -135,7 +135,7 @@ void accumulateWeightedSum(
     cv::Mat& accumulator,
     cv::Mat& sum_weight)
 {
-    XCHECK_EQ(accumulator.size(), nei_image.size());
+  XCHECK_EQ(accumulator.size(), nei_image.size());
   XCHECK_EQ(accumulator.size(), sum_weight.size());
   if (std::is_same<TImage, cv::Vec3b>::value) XCHECK_EQ(nei_image.type(), CV_8UC3);
   if (std::is_same<TImage, float>::value) XCHECK_EQ(nei_image.type(), CV_32FC1);

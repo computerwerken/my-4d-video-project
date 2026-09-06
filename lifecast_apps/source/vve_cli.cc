@@ -49,6 +49,13 @@ DEFINE_double(ftheta_scale, 1.15, "f-theta scale.");
 DEFINE_string(depth_method, "raft", "raft | da3_fused | da3_only");
 DEFINE_double(da3_blend, 0.6, "0=stereo, 1=aligned DA3.");
 DEFINE_string(da3_model_path, "", "Override path to da3_stereo.pt.");
+DEFINE_string(stereo_backend, "raft",
+    "raft | external. external = rectified pairs are served to a sidecar process via "
+    "<dest_dir>/xstereo (see scripts/ffs_daemon.py); DA3 fusion still applies on top.");
+DEFINE_double(external_disparity_scale, 32.0,
+    "uint16 disparity PNG = pixels * scale (must match the daemon's --scale).");
+DEFINE_double(external_timeout_sec, 900,
+    "Seconds to wait per frame for the external stereo process.");
 // These four default to the GUI's values. Empty/zero are NOT harmless: an empty
 // inpaint_method matches neither branch in ldi_common.cc so inpainting is silently
 // skipped, an empty seg_method likewise skips segmentation, and a dilate radius of
@@ -96,6 +103,10 @@ void writeJg4dSidecar(const p11::ldi::LdiPipelineConfig& cfg) {
         << "  \"baseline_m\": " << cfg.baseline_m << ",\n"
         << "  \"depth_method\": \"" << cfg.depth_method << "\",\n"
         << "  \"da3_blend\": " << cfg.da3_blend << ",\n"
+        << "  \"stereo_backend\": \"" << cfg.stereo_backend << "\",\n"
+        << "  \"ftheta_size\": " << cfg.ftheta_size << ",\n"
+        << "  \"inflated_ftheta_size\": " << cfg.inflated_ftheta_size << ",\n"
+        << "  \"rectified_size_for_depth\": " << cfg.rectified_size_for_depth << ",\n"
         << "  \"decode_12bit\": true\n" << "}\n";
   XPLINFO << "Wrote " << path;
 }
@@ -141,6 +152,12 @@ int main(int argc, char** argv) {
   cfg.skip_every_other_frame = FLAGS_skip_every_other_frame;
   cfg.depth_method = FLAGS_depth_method; cfg.da3_blend = FLAGS_da3_blend;
   cfg.da3_model_path = FLAGS_da3_model_path;
+  cfg.stereo_backend = FLAGS_stereo_backend;
+  cfg.external_disparity_scale = FLAGS_external_disparity_scale;
+  cfg.external_timeout_sec = FLAGS_external_timeout_sec;
+  if (cfg.stereo_backend != "raft" && cfg.stereo_backend != "external") {
+    XPLINFO << "FATAL: --stereo_backend must be raft or external"; return 1;
+  }
   if (cfg.output_encoding != "split12" && cfg.output_encoding != "8bit" &&
       cfg.output_encoding != "16bit") {
     XPLINFO << "FATAL: --output_encoding=" << cfg.output_encoding
